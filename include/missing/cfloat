@@ -1,3 +1,9 @@
-// cfloat is included by GLM but not actually used. Popc doesn't ship this file so add an empty one.
-// Undoubtedly this empty file will cause someone a massive headache one day...
+// Popc doesn't ship this file so add it:
+
+#ifndef __CFLOAT_HEADER
+#define __CFLOAT_HEADER
+
+#include <float.h>
+
+#endif // CFLOAT_HEADER
 
