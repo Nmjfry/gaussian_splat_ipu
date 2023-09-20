@@ -4,7 +4,7 @@
 #include <print.h>
 #include <poplar/StackSizeDefs.hpp>
 
-#include <glm/mat4x4.hpp>
+#include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
 #ifdef __IPU__

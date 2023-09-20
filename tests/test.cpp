@@ -7,7 +7,7 @@
 
 #include <ipu_utils.hpp>
 
-#include <glm/mat4x4.hpp>
+#include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
 ipu_utils::RuntimeConfig testConfig {
@@ -40,9 +40,11 @@ BOOST_AUTO_TEST_CASE(IpuGlm) {
     // Build test graph:
     [&](Graph& graph, const Target& target, ipu_utils::ProgramManager& progs) {
       const auto codeletFile = std::string(POPC_PREFIX) + "/codelets/tests/codelets.cpp";
-      const auto includePath = std::string(POPC_PREFIX) + "/external/glm/";
+      const auto glmPath = std::string(POPC_PREFIX) + "/external/glm/";
+      const auto otherIncludes = std::string(POPC_PREFIX) + "/include/missing";
+      const auto includes = " -I " + glmPath + " -I " + otherIncludes;
       ipu_utils::logger()->debug("POPC_PREFIX: {}", POPC_PREFIX);
-      graph.addCodelets(codeletFile, poplar::CodeletFileType::Auto, "-O3 -I " + includePath);
+      graph.addCodelets(codeletFile, poplar::CodeletFileType::Auto, "-O3" + includes);
 
       auto cs1 = graph.addComputeSet("test_cs");
       auto v1 = graph.addVertex(cs1, "GlmMat4");
