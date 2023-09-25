@@ -9,6 +9,8 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/transform2.hpp>
 
 ipu_utils::RuntimeConfig testConfig {
   1, 1, // numIpus, numReplicas
@@ -32,9 +34,12 @@ BOOST_AUTO_TEST_CASE(Glm) {
   BOOST_CHECK_EQUAL(vgl.w, 300);
 }
 
-BOOST_AUTO_TEST_CASE(IpuGlm) {
+// Use a lambda builder to run an isolated and stateless vertex
+// (e.g. a vertex that runs a self contained test). Returns the
+// exit code of the vertex runner (equal to EXIT_SUCCESS
+// if the vertex ran with no errors).
+int runStatelessVertex(std::string vertexName) {
   using namespace poplar;
-  spdlog::set_level(spdlog::level::warn);
 
   auto ipuTest = ipu_utils::LambdaBuilder(
     // Build test graph:
@@ -47,7 +52,7 @@ BOOST_AUTO_TEST_CASE(IpuGlm) {
       graph.addCodelets(codeletFile, poplar::CodeletFileType::Auto, "-O3" + includes);
 
       auto cs1 = graph.addComputeSet("test_cs");
-      auto v1 = graph.addVertex(cs1, "GlmMat4");
+      auto v1 = graph.addVertex(cs1, vertexName);
       graph.setTileMapping(v1, 0);
 
       program::Sequence runTest({program::Execute(cs1)});
@@ -60,6 +65,13 @@ BOOST_AUTO_TEST_CASE(IpuGlm) {
   );
 
   ipuTest.setRuntimeConfig(testConfig);
-  auto exitCode = ipu_utils::GraphManager().run(ipuTest);
-  BOOST_CHECK_EQUAL(exitCode, EXIT_SUCCESS);
+  return ipu_utils::GraphManager().run(ipuTest);
+}
+
+BOOST_AUTO_TEST_CASE(IpuGlm) {
+  using namespace poplar;
+  spdlog::set_level(spdlog::level::warn);
+
+  BOOST_CHECK_EQUAL(EXIT_SUCCESS, runStatelessVertex("GlmMat4"));
+  BOOST_CHECK_EQUAL(EXIT_SUCCESS, runStatelessVertex("GlmTransform"));
 }
