@@ -21,6 +21,7 @@ include_directories(
   ${OpenCV_INCLUDE_DIRS}
   ${GLM_INCLUDE_DIRS}
   ${IPU_INCLUDES}
+  ${PROJECT_SOURCE_DIR}/include
 )
 
 set(POPLAR_LINK_LIBRARIES -lpoplin -lpopnn -lpoplar -lpopops -lpoputil -lpoprand -lgcl -lpvti)
