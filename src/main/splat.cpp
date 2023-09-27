@@ -75,6 +75,15 @@ int main(int argc, char** argv) {
   splat::Bounds3f bb(pts);
   ipu_utils::logger()->info("Point bounds (world space): {}", bb);
 
+  // Translate all points so the centroid is zero:
+  {
+    const auto bbCentre = bb.centroid();
+    for (auto& v : pts) {
+      v.p -= bbCentre;
+    }
+  }
+  bb = splat::Bounds3f(pts);
+
   // Set up the modelling and projection transforms in an OpenGL compatible way:
   auto modelView = splat::lookAtBoundingBox(bb, glm::vec3(0.f , 1.f, 0.f), 1.f);
 
@@ -101,15 +110,18 @@ int main(int argc, char** argv) {
     uiServer->initialiseVideoStream(image.cols, image.rows);
   }
 
+  auto dynamicView = modelView;
   do {
     auto startTime = std::chrono::steady_clock::now();
     image = 0;
-    auto count = splatPoints(image, modelView, projection, viewport, pts);
+    auto count = splatPoints(image, dynamicView, projection, viewport, pts);
     auto endTime = std::chrono::steady_clock::now();
     auto splatTimeSecs = std::chrono::duration<double>(endTime - startTime).count();
     if (uiServer) {
       state = uiServer->consumeState();
       uiServer->sendPreviewImage(image);
+      // Update modelview:
+      dynamicView = modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(0.f, 1.f, 0.f));
     } else {
       // Only log these if not in interactive mode:
       ipu_utils::logger()->info("Splat time: {} points/sec: {}", splatTimeSecs, pts.size()/splatTimeSecs);
