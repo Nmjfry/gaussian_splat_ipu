@@ -75,14 +75,15 @@ int main(int argc, char** argv) {
   splat::Bounds3f bb(pts);
   ipu_utils::logger()->info("Point bounds (world space): {}", bb);
 
-  // Translate all points so the centroid is zero:
+  // Translate all points so the centroid is zero then negate the z-axis:
   {
     const auto bbCentre = bb.centroid();
     for (auto& v : pts) {
       v.p -= bbCentre;
+      v.p.z = -v.p.z;
     }
+    bb = splat::Bounds3f(pts);
   }
-  bb = splat::Bounds3f(pts);
 
   // Set up the modelling and projection transforms in an OpenGL compatible way:
   auto modelView = splat::lookAtBoundingBox(bb, glm::vec3(0.f , 1.f, 0.f), 1.f);
@@ -120,6 +121,8 @@ int main(int argc, char** argv) {
     if (uiServer) {
       state = uiServer->consumeState();
       uiServer->sendPreviewImage(image);
+      // Update projection:
+      projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
       // Update modelview:
       dynamicView = modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(0.f, 1.f, 0.f));
     } else {
