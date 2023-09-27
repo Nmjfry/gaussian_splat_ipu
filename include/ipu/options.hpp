@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <boost/program_options.hpp>
+
 #include <ipu/io_utils.hpp>
 
 inline

@@ -30,5 +30,9 @@ set(POPLAR_LINK_LIBRARIES -lpoplin -lpopnn -lpoplar -lpopops -lpoputil -lpoprand
 # path to give us a prefix to start from:
 add_compile_definitions(POPC_PREFIX="${PROJECT_SOURCE_DIR}")
 
+# Libraries:
+add_subdirectory(${PROJECT_SOURCE_DIR}/src/splat)
+
+# Executables:
 add_subdirectory(${PROJECT_SOURCE_DIR}/tests)
 add_subdirectory(${PROJECT_SOURCE_DIR}/src/main)

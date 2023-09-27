@@ -11,3 +11,4 @@ Which bits are a good fit for IPU?:
 Which bits will be difficult?:
 - After transformation and sorting Gaussians need to be dynamically moved to the destination tile(s) for splatting.
 - Load imbalances: depending on scene and viewpoint the number of Gaussians splatted per tile could vary significantly.
+ - I.e. any one gaussian might need to be splatted on 0 or all tiles!
