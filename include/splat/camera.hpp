@@ -16,7 +16,7 @@ struct Viewport {
 
   // The input point should be in normalised device coords
   // (i.e. perspective division is already applied):
-  glm::vec2 ndcToViewport(glm::vec4 ndc) {
+  glm::vec2 ndcToViewport(glm::vec4 ndc) const {
     glm::vec2 vp(ndc.x, ndc.y);
     vp *= .5f;
     vp += .5f;
@@ -24,7 +24,7 @@ struct Viewport {
   }
 
   // Combine perspective division with viewport scaling:
-  glm::vec2 clipSpaceToViewport(glm::vec4 cs) {
+  glm::vec2 clipSpaceToViewport(glm::vec4 cs) const {
     glm::vec2 vp(cs.x, cs.y);
     vp *= .5f / cs.w;
     vp += .5f;
@@ -32,7 +32,7 @@ struct Viewport {
   }
 
   // Converts from normalised screen coords to the specified view window:
-  glm::vec2 viewportTransform(glm::vec2 v) {
+  glm::vec2 viewportTransform(glm::vec2 v) const {
     v.x *= spec[2];
     v.y *= spec[3];
     v.x += spec[0];

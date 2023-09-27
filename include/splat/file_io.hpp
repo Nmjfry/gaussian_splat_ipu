@@ -10,6 +10,6 @@
 namespace splat {
 
 /// Very basic (and limited) funciton to load a pointcloud xyz text file:
-Points loadXyz(std::istream& s);
+Points loadXyz(std::istream&& s);
 
 } // end of namespace splat

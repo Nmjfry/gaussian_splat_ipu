@@ -6,7 +6,7 @@
 
 namespace splat {
 
-Points loadXyz(std::istream& s) {
+Points loadXyz(std::istream&& s) {
   Points pts;
   pts.reserve(1000000);
 

@@ -11,6 +11,7 @@
 #include <splat/geometry.hpp>
 #include <splat/camera.hpp>
 #include <splat/file_io.hpp>
+#include <splat/serialise.hpp>
 
 void addOptions(boost::program_options::options_description& desc) {
   namespace po = boost::program_options;
@@ -19,6 +20,37 @@ void addOptions(boost::program_options::options_description& desc) {
   ("input,o", po::value<std::string>()->required(), "Input XYZ file.")
   ("log-level", po::value<std::string>()->default_value("info"),
   "Set the log level to one of the following: 'trace', 'debug', 'info', 'warn', 'err', 'critical', 'off'.");
+}
+
+/// Apply modelview and projection transforms to points then accumulate results to an OpenCV image.
+/// Returns the number of splatted points (the number of points that pass the image clip test).
+std::uint32_t splatPoints(cv::Mat& image,
+                          const glm::mat4& modelView, const glm::mat4& projection,
+                          const splat::Viewport& viewport,
+                          const splat::Points& pts,
+                          std::uint8_t value=25) {
+  std::uint32_t count = 0u;
+  const auto mvp = projection * modelView;
+  const auto colour = cv::Vec3b(value, value, value);
+
+  #pragma omp parallel for schedule(static, 128) num_threads(32)
+  for (auto& v : pts) {
+    // Project points to clip space:
+    auto clipCoords = mvp * glm::vec4(v.p, 1.f);
+
+    // Now convert to pixel coords:
+    glm::vec2 windowCoords = viewport.clipSpaceToViewport(clipCoords);
+    std::uint32_t r = windowCoords.y;
+    std::uint32_t c = windowCoords.x;
+
+    // Clip points to the image and splat:
+    if (r < image.rows && c < image.cols) {
+      image.at<cv::Vec3b>(r, c) += colour;
+      count += 1;
+    }
+  }
+
+  return count;
 }
 
 int main(int argc, char** argv) {
@@ -34,12 +66,9 @@ int main(int argc, char** argv) {
   }
 
   auto xyzFile = args["input"].as<std::string>();
-  auto fs = std::ifstream(xyzFile);
-  auto pts = splat::loadXyz(fs);
+  auto pts = splat::loadXyz(std::ifstream(xyzFile));
   splat::Bounds3f bb(pts);
-  ipu_utils::logger()->info("Point bounds (world space): {} {} {} -> {} {} {}",
-                            bb.min.x, bb.min.y, bb.min.z,
-                            bb.max.x, bb.max.y, bb.max.z);
+  ipu_utils::logger()->info("Point bounds (world space): {}", bb);
 
   // Set up the modelling and projection transforms in an OpenGL compatible way:
   auto modelView = splat::lookAtBoundingBox(bb, glm::vec3(0.f , 1.f, 0.f), 1.f);
@@ -50,36 +79,17 @@ int main(int argc, char** argv) {
   splat::Viewport viewport(0.f, 0.f, image.cols, image.rows);
   const float aspect = image.cols / (float)image.rows;
 
-  // Fit a perspective viewing frustum to the camera/eye space bounding box.
-
-  // Transform the BB to eye space:
-  auto bbMin = modelView * glm::vec4(bb.min, 1.f);
-  auto bbMax = modelView * glm::vec4(bb.max, 1.f);
-  splat::Bounds3f bbInCamera(bbMin, bbMax);
-  ipu_utils::logger()->info("Point bounds (eye space): {} {} {} -> {} {} {}",
-                            bbInCamera.min.x, bbInCamera.min.y, bbInCamera.min.z,
-                            bbInCamera.max.x, bbInCamera.max.y, bbInCamera.max.z);
-  auto projection = splat::fitFrustumToBoundingBox(bb, glm::radians(40.0f), aspect);
-  auto count = 0u;
+  // Transform the BB to camera/eye space:
+  splat::Bounds3f bbInCamera(
+    modelView * glm::vec4(bb.min, 1.f),
+    modelView * glm::vec4(bb.max, 1.f)
+  );
+  ipu_utils::logger()->info("Point bounds (eye space): {}", bbInCamera);
+  auto projection = splat::fitFrustumToBoundingBox(bbInCamera, glm::radians(40.0f), aspect);
 
   auto startTime = std::chrono::steady_clock::now();
 
-  #pragma omp parallel for schedule(static, 128) num_threads(32)
-  for (auto& v : pts) {
-    // Project points to clip space:
-    auto clipCoords = projection * modelView * glm::vec4(v.p, 1.f);
-
-    // Finally convert to pixel coords:
-    glm::vec2 windowCoords = viewport.clipSpaceToViewport(clipCoords);
-    std::uint32_t r = windowCoords.y;
-    std::uint32_t c = windowCoords.x;
-
-    // Clip points to the image and splat:
-    if (r < image.rows && c < image.cols) {
-      image.at<cv::Vec3b>(r, c) += cv::Vec3b(25, 25, 25);
-      count += 1;
-    }
-  }
+  auto count = splatPoints(image, modelView, projection, viewport, pts);
 
   auto endTime = std::chrono::steady_clock::now();
   auto splatTimeSecs = std::chrono::duration<double>(endTime - startTime).count();
