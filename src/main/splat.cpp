@@ -60,8 +60,11 @@ int main(int argc, char** argv) {
                             bbInCamera.min.x, bbInCamera.min.y, bbInCamera.min.z,
                             bbInCamera.max.x, bbInCamera.max.y, bbInCamera.max.z);
   auto projection = splat::fitFrustumToBoundingBox(bb, glm::radians(40.0f), aspect);
-
   auto count = 0u;
+
+  auto startTime = std::chrono::steady_clock::now();
+
+  #pragma omp parallel for schedule(static, 128) num_threads(32)
   for (auto& v : pts) {
     // Project points to clip space:
     auto clipCoords = projection * modelView * glm::vec4(v.p, 1.f);
@@ -78,8 +81,12 @@ int main(int argc, char** argv) {
     }
   }
 
+  auto endTime = std::chrono::steady_clock::now();
+  auto splatTimeSecs = std::chrono::duration<double>(endTime - startTime).count();
+
   ipu_utils::logger()->info("Total point count: {}", pts.size());
   ipu_utils::logger()->info("Splatted point count: {}", count);
+  ipu_utils::logger()->info("Splat time: {} points/sec: {}", splatTimeSecs, pts.size()/splatTimeSecs);
   cv::imwrite("test.png", image);
 
   return EXIT_SUCCESS;
