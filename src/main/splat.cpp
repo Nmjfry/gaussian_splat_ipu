@@ -13,13 +13,16 @@
 #include <splat/file_io.hpp>
 #include <splat/serialise.hpp>
 
+#include <remote_ui/InterfaceServer.hpp>
+
 void addOptions(boost::program_options::options_description& desc) {
   namespace po = boost::program_options;
   desc.add_options()
   ("help", "Show command help.")
   ("input,o", po::value<std::string>()->required(), "Input XYZ file.")
   ("log-level", po::value<std::string>()->default_value("info"),
-  "Set the log level to one of the following: 'trace', 'debug', 'info', 'warn', 'err', 'critical', 'off'.");
+   "Set the log level to one of the following: 'trace', 'debug', 'info', 'warn', 'err', 'critical', 'off'.")
+  ("ui-port", po::value<int>()->default_value(0), "Start a remote user-interface server on the specified port.");
 }
 
 /// Apply modelview and projection transforms to points then accumulate results to an OpenCV image.
@@ -46,6 +49,8 @@ std::uint32_t splatPoints(cv::Mat& image,
     // Clip points to the image and splat:
     if (r < image.rows && c < image.cols) {
       image.at<cv::Vec3b>(r, c) += colour;
+
+      #pragma omp atomic update
       count += 1;
     }
   }
@@ -75,7 +80,6 @@ int main(int argc, char** argv) {
 
   // Splat all the points into an OpenCV image:
   cv::Mat image(720, 1280, CV_8UC3);
-  image = 0.f;
   splat::Viewport viewport(0.f, 0.f, image.cols, image.rows);
   const float aspect = image.cols / (float)image.rows;
 
@@ -87,16 +91,33 @@ int main(int argc, char** argv) {
   ipu_utils::logger()->info("Point bounds (eye space): {}", bbInCamera);
   auto projection = splat::fitFrustumToBoundingBox(bbInCamera, glm::radians(40.0f), aspect);
 
-  auto startTime = std::chrono::steady_clock::now();
+  // Setup a user interface server if requested:
+  std::unique_ptr<InterfaceServer> uiServer;
+  InterfaceServer::State state;
+  auto uiPort = args.at("ui-port").as<int>();
+  if (uiPort) {
+    uiServer.reset(new InterfaceServer(uiPort));
+    uiServer->start();
+    uiServer->initialiseVideoStream(image.cols, image.rows);
+  }
 
-  auto count = splatPoints(image, modelView, projection, viewport, pts);
+  do {
+    auto startTime = std::chrono::steady_clock::now();
+    image = 0;
+    auto count = splatPoints(image, modelView, projection, viewport, pts);
+    auto endTime = std::chrono::steady_clock::now();
+    auto splatTimeSecs = std::chrono::duration<double>(endTime - startTime).count();
+    if (uiServer) {
+      state = uiServer->consumeState();
+      uiServer->sendPreviewImage(image);
+    } else {
+      // Only log these if not in interactive mode:
+      ipu_utils::logger()->info("Splat time: {} points/sec: {}", splatTimeSecs, pts.size()/splatTimeSecs);
+      ipu_utils::logger()->info("Total point count: {}", pts.size());
+      ipu_utils::logger()->info("Splatted point count: {}", count);
+    }
+  } while (uiServer && state.stop == false);
 
-  auto endTime = std::chrono::steady_clock::now();
-  auto splatTimeSecs = std::chrono::duration<double>(endTime - startTime).count();
-
-  ipu_utils::logger()->info("Total point count: {}", pts.size());
-  ipu_utils::logger()->info("Splatted point count: {}", count);
-  ipu_utils::logger()->info("Splat time: {} points/sec: {}", splatTimeSecs, pts.size()/splatTimeSecs);
   cv::imwrite("test.png", image);
 
   return EXIT_SUCCESS;

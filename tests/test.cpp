@@ -5,7 +5,7 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include <ipu_utils.hpp>
+#include <ipu/ipu_utils.hpp>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>

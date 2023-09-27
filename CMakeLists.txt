@@ -14,7 +14,6 @@ find_package(OpenCV REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(Boost COMPONENTS unit_test_framework REQUIRED)
 set(GLM_INCLUDE_DIRS external/glm)
-set(IPU_INCLUDES include/ipu)
 
 include_directories(
   ${Boost_INCLUDE_DIRS}
@@ -33,6 +32,11 @@ add_compile_definitions(POPC_PREFIX="${PROJECT_SOURCE_DIR}")
 # External Libraries:
 add_subdirectory(external/packetcomms)
 add_subdirectory(external/videolib)
+
+include_directories(
+  ${PACKETCOMMS_INCLUDES}
+  ${VIDEOLIB_INCLUDES}
+)
 
 # Internal libraries:
 add_subdirectory(${PROJECT_SOURCE_DIR}/src/splat)
