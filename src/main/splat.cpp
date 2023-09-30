@@ -85,13 +85,25 @@ int main(int argc, char** argv) {
     bb = splat::Bounds3f(pts);
   }
 
-  // Set up the modelling and projection transforms in an OpenGL compatible way:
-  auto modelView = splat::lookAtBoundingBox(bb, glm::vec3(0.f , 1.f, 0.f), 1.f);
-
   // Splat all the points into an OpenCV image:
   cv::Mat image(720, 1280, CV_8UC3);
   splat::Viewport viewport(0.f, 0.f, image.cols, image.rows);
   const float aspect = image.cols / (float)image.rows;
+
+  // Setup a user interface server if requested:
+  std::unique_ptr<InterfaceServer> uiServer;
+  InterfaceServer::State state;
+  state.fov = glm::radians(40.f);
+  auto uiPort = args.at("ui-port").as<int>();
+  if (uiPort) {
+    uiServer.reset(new InterfaceServer(uiPort));
+    uiServer->start();
+    uiServer->initialiseVideoStream(image.cols, image.rows);
+    uiServer->updateFov(state.fov);
+  }
+
+  // Set up the modelling and projection transforms in an OpenGL compatible way:
+  auto modelView = splat::lookAtBoundingBox(bb, glm::vec3(0.f , 1.f, 0.f), 1.f);
 
   // Transform the BB to camera/eye space:
   splat::Bounds3f bbInCamera(
@@ -99,17 +111,7 @@ int main(int argc, char** argv) {
     modelView * glm::vec4(bb.max, 1.f)
   );
   ipu_utils::logger()->info("Point bounds (eye space): {}", bbInCamera);
-  auto projection = splat::fitFrustumToBoundingBox(bbInCamera, glm::radians(40.0f), aspect);
-
-  // Setup a user interface server if requested:
-  std::unique_ptr<InterfaceServer> uiServer;
-  InterfaceServer::State state;
-  auto uiPort = args.at("ui-port").as<int>();
-  if (uiPort) {
-    uiServer.reset(new InterfaceServer(uiPort));
-    uiServer->start();
-    uiServer->initialiseVideoStream(image.cols, image.rows);
-  }
+  auto projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
 
   auto dynamicView = modelView;
   do {
