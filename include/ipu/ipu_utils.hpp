@@ -530,63 +530,13 @@ public:
   /// Returns the exit code for the host program.
   int run(BuilderInterface& builder, const poplar::OptionFlags& opts = {}) {
     try {
-      pvti::TraceChannel traceChannel = {"ipu_utils::GraphManager"};
-
-      logger()->info("Poplar version: {}", poplar::versionString());
-      auto config = builder.getRuntimeConfig();
-      auto device = builder.getDevice();
-      logger()->info("Creating graph with {} replicas", config.numReplicas);
-      poplar::Graph graph(device->getTarget(), poplar::replication_factor(config.numReplicas));
-
-      if (config.loadExe) {
-        // When loading, we simply load-construct the executable and run it:
-        pvti::Tracepoint::begin(&traceChannel, "loading_graph");
-        poplar::Executable exe = loadExe(config.exeName);
-        // Need to load a ProgramManager also:
-        auto progsFileName = makeProgramsFileName(config.exeName);
-        try {
-          std::ifstream fs(progsFileName);
-          builder.getPrograms().deserialise(fs);
-        } catch (const std::exception& e) {
-          logger()->error("Error: failed to load program list from '{}'", progsFileName);
-          throw;
-        }
-        pvti::Tracepoint::end(&traceChannel, "loading_graph");
-        executeGraphProgram(exe, *device, builder, opts);
-      } else {
-        // Otherwise we must build and compile the graph:
-        logger()->info("Graph construction started");
-        pvti::Tracepoint::begin(&traceChannel, "constructing_graph");
-        builder.build(graph, device->getTarget());
-        pvti::Tracepoint::end(&traceChannel, "constructing_graph");
-        logger()->info("Graph construction finished");
-
-        logger()->info("Graph compilation started");
-        pvti::Tracepoint::begin(&traceChannel, "compiling_graph");
-        CallbackFilter progress([] (int done, int todo) {
-          logger()->debug("Compilation step {}/{}", done, todo);
-        });
-        poplar::Executable exe = poplar::compileGraph(graph, builder.getPrograms().getList(), {},
-                                                      progress.getFilteredCallback(), "ipu_utils_engine");
-        pvti::Tracepoint::end(&traceChannel, "compiling_graph");
-        logger()->info("Graph compilation finished");
-
-        if (config.saveExe) {
-          saveExe(exe, config.exeName);
-          std::ofstream fs(makeProgramsFileName(config.exeName));
-          // Need to serialise the ProgramManager also:
-          builder.getPrograms().serialise(fs);
-        }
-
-        if (config.compileOnly) {
-            ipu_utils::logger()->info("Compile only mode selected: finished.");
-            return EXIT_SUCCESS;
-        }
-
-        // Run the graph we just built and compiled.
-        executeGraphProgram(exe, *device, builder, opts);
+      compileOrLoad(builder, opts);
+      if (builder.getRuntimeConfig().compileOnly) {
+        return EXIT_SUCCESS;
       }
 
+      prepareEngine(opts);
+      execute(builder);
     } catch (const std::exception& e) {
       ipu_utils::logger()->error("Exception: {}", e.what());
       return EXIT_FAILURE;
@@ -595,18 +545,81 @@ public:
     return EXIT_SUCCESS;
   }
 
-private:
-  void executeGraphProgram(poplar::Executable& exe,
-                           DeviceInterface& device,
-                           BuilderInterface& builder,
-                           const poplar::OptionFlags& opts) {
-    // Prepare the execution engine and connect
-    // data streams to/from IPU:
-    poplar::Engine engine(std::move(exe), opts);
-    device.attach();
-    engine.load(device.getPoplarDevice());
-    builder.execute(engine, device.getPoplarDevice());
+  void compileOrLoad(BuilderInterface& builder, const poplar::OptionFlags& opts = {}) {
+    pvti::TraceChannel traceChannel = {"ipu_utils::GraphManager"};
+
+    logger()->info("Poplar version: {}", poplar::versionString());
+    auto config = builder.getRuntimeConfig();
+    device = builder.getDevice();
+    logger()->info("Creating graph with {} replicas", config.numReplicas);
+    poplar::Graph graph(device->getTarget(), poplar::replication_factor(config.numReplicas));
+
+    if (config.loadExe) {
+      // When loading, we simply load-construct the executable and run it:
+      pvti::Tracepoint::begin(&traceChannel, "loading_graph");
+      poplar::Executable exe = loadExe(config.exeName);
+      // Need to load a ProgramManager also:
+      auto progsFileName = makeProgramsFileName(config.exeName);
+      try {
+        std::ifstream fs(progsFileName);
+        builder.getPrograms().deserialise(fs);
+      } catch (const std::exception& e) {
+        logger()->error("Error: failed to load program list from '{}'", progsFileName);
+        throw;
+      }
+      pvti::Tracepoint::end(&traceChannel, "loading_graph");
+    } else {
+      // Otherwise we must build and compile the graph:
+      logger()->info("Graph construction started");
+      pvti::Tracepoint::begin(&traceChannel, "constructing_graph");
+      builder.build(graph, device->getTarget());
+      pvti::Tracepoint::end(&traceChannel, "constructing_graph");
+      logger()->info("Graph construction finished");
+
+      logger()->info("Graph compilation started");
+      pvti::Tracepoint::begin(&traceChannel, "compiling_graph");
+      CallbackFilter progress([] (int done, int todo) {
+        logger()->debug("Compilation step {}/{}", done, todo);
+      });
+      exe = poplar::compileGraph(graph, builder.getPrograms().getList(), {},
+                                                    progress.getFilteredCallback(), "ipu_utils_engine");
+      pvti::Tracepoint::end(&traceChannel, "compiling_graph");
+      logger()->info("Graph compilation finished");
+
+      if (config.saveExe) {
+        saveExe(exe, config.exeName);
+        std::ofstream fs(makeProgramsFileName(config.exeName));
+        // Need to serialise the ProgramManager also:
+        builder.getPrograms().serialise(fs);
+      }
+
+      if (config.compileOnly) {
+        ipu_utils::logger()->info("Compile only mode selected: finished.");
+      }
+    }
   }
+
+  void prepareEngine(const poplar::OptionFlags& opts = {}) {
+    if (engine) {
+      throw std::runtime_error("Engine already prepared.");
+    }
+
+    engine = std::make_unique<poplar::Engine>(std::move(exe), opts);
+    device->attach();
+    engine->load(device->getPoplarDevice());
+  }
+
+  void execute(BuilderInterface& builder) {
+    if (engine == nullptr || device == nullptr) {
+      throw std::runtime_error("Engine not prepared.");
+    }
+    builder.execute(*engine, device->getPoplarDevice());
+  }
+
+private:
+  poplar::Executable exe;
+  std::unique_ptr<DeviceInterface> device;
+  std::unique_ptr<poplar::Engine> engine;
 };
 
 } // end namespace utils
