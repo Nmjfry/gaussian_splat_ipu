@@ -25,6 +25,42 @@ void addOptions(boost::program_options::options_description& desc) {
   ("ui-port", po::value<int>()->default_value(0), "Start a remote user-interface server on the specified port.");
 }
 
+struct TiledFramebuffer {
+  TiledFramebuffer(std::uint16_t w, std::uint16_t h, std::uint16_t tw, std::uint16_t th)
+  :
+    width(w), height(h),
+    tileWidth(tw), tileHeight(th)
+  {
+    numTilesAcross = width / tileWidth;
+    numTilesDown = height / tileHeight;
+    numTiles = numTilesAcross * numTilesDown;
+  }
+
+  float pixCoordToTile(float row, float col) const {
+    float r = std::nearbyint(row);
+    float c = std::nearbyint(col);
+
+    // Round to tile indices:
+    float tileColIndex = std::floor(c / tileWidth);
+    float tileRowIndex = std::floor(r / tileHeight);
+
+    // Now flatten the tile indices:
+    float tileIndex = (tileRowIndex * numTilesAcross) + tileColIndex;
+    return tileIndex;
+  }
+
+  std::uint16_t width;
+  std::uint16_t height;
+  std::uint16_t tileWidth;
+  std::uint16_t tileHeight;
+
+  // Use floats for these so that indexing
+  // calculations will be fast on IPU:
+  float numTilesAcross;
+  float numTilesDown;
+  float numTiles;
+};
+
 /// Apply modelview and projection transforms to points then accumulate results to an OpenCV image.
 /// Returns the number of splatted points (the number of points that pass the image clip test).
 std::uint32_t splatPoints(cv::Mat& image,
@@ -56,6 +92,38 @@ std::uint32_t splatPoints(cv::Mat& image,
   }
 
   return count;
+}
+
+void buildTileHistogram(std::vector<std::uint32_t>& counts,
+                        const TiledFramebuffer& fb,
+                        const glm::mat4& modelView, const glm::mat4& projection,
+                        const splat::Viewport& viewport,
+                        const splat::Points& pts,
+                        std::uint8_t value=25) {
+  std::uint32_t count = 0u;
+  const auto mvp = projection * modelView;
+  const auto colour = cv::Vec3b(value, value, value);
+
+  for (auto& c : counts) {
+    c = 0u;
+  }
+
+  //#pragma omp parallel for schedule(static, 128) num_threads(32)
+  for (auto& v : pts) {
+    // Project points to clip space:
+    auto clipCoords = mvp * glm::vec4(v.p, 1.f);
+
+    // Now convert to pixel coords:
+    glm::vec2 windowCoords = viewport.clipSpaceToViewport(clipCoords);
+    std::uint32_t r = windowCoords.y;
+    std::uint32_t c = windowCoords.x;
+
+    // Clip points to the image and splat:
+    if (r < fb.height && c < fb.width) {
+      auto tidx = fb.pixCoordToTile(r, c);
+      counts[tidx] += 1;
+    }
+  }
 }
 
 int main(int argc, char** argv) {
@@ -90,6 +158,16 @@ int main(int argc, char** argv) {
   splat::Viewport viewport(0.f, 0.f, image.cols, image.rows);
   const float aspect = image.cols / (float)image.rows;
 
+  // Construct some tiled framebuffer histograms:
+  TiledFramebuffer fb(image.cols, image.rows, 40, 16);
+  auto pointCounts = std::vector<std::uint32_t>(fb.numTiles, 0u);
+
+  ipu_utils::logger()->info("Number of tiles in framebuffer: {}", fb.numTiles);
+  float x = 719.f;
+  float y = 1279.f;
+  auto tileId = fb.pixCoordToTile(x, y);
+  ipu_utils::logger()->info("Tile index test. Pix coord {}, {} -> tile id: {}", x, y, tileId);
+
   // Setup a user interface server if requested:
   std::unique_ptr<InterfaceServer> uiServer;
   InterfaceServer::State state;
@@ -117,6 +195,7 @@ int main(int argc, char** argv) {
   do {
     auto startTime = std::chrono::steady_clock::now();
     image = 0;
+    buildTileHistogram(pointCounts, fb, dynamicView, projection, viewport, pts);
     auto count = splatPoints(image, dynamicView, projection, viewport, pts);
     auto endTime = std::chrono::steady_clock::now();
     auto splatTimeSecs = std::chrono::duration<double>(endTime - startTime).count();
@@ -136,6 +215,22 @@ int main(int argc, char** argv) {
   } while (uiServer && state.stop == false);
 
   cv::imwrite("test.png", image);
+
+  auto count = 0u;
+  auto tile = 0u;
+  auto emptyTiles = 0u;
+  std::fstream of("out.txt");
+  for (auto& c : pointCounts) {
+    of << tile << " " << c << "\n";
+    tile += 1;
+    count += c;
+    if (c == 0) {
+      emptyTiles += 1;
+    }
+  }
+
+  ipu_utils::logger()->info("Histogram point count: {}", count);
+  ipu_utils::logger()->info("Tiles with no work to do: {}", emptyTiles);
 
   return EXIT_SUCCESS;
 }
