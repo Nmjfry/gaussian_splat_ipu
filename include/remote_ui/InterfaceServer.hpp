@@ -41,6 +41,7 @@ const std::vector<std::string> packetTypes {
                            // HDR image (server -> client).
     "interactive_samples", // New value for interactive samples per step  (client -> server)
     "ready",               // Used to sync with the other side once all other subscribers are ready (bi-directional)
+    "tile_histogram",      // Histogram tile workload distribution (server -> client)
 };
 
 // Struct and serialize function for HDR
@@ -280,6 +281,7 @@ public:
     }
   }
 
+  /// Send the preview image in a compressed video stream:
   void sendPreviewImage(const cv::Mat& ldrImage) {
     VideoFrame frame(ldrImage.data, AV_PIX_FMT_BGR24, ldrImage.cols, ldrImage.rows, ldrImage.step);
     bool ok = videoStream->PutVideoFrame(frame);
@@ -288,6 +290,11 @@ public:
     }
   }
 
+  void sendHistogram(const std::vector<std::uint32_t>& data) {
+    serialise(*sender, "tile_histogram", data);
+  }
+
+  /// Send a raw uncompressed (e.g. HDR) image slowly in chunks in the background:
   bool startSendingRawImage(cv::Mat&& rawImage, std::size_t step) {
     // Wait for any previous tasks to complete:
     if (sendHdrTask.isRunning()) {

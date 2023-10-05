@@ -196,11 +196,13 @@ int main(int argc, char** argv) {
     auto startTime = std::chrono::steady_clock::now();
     image = 0;
     buildTileHistogram(pointCounts, fb, dynamicView, projection, viewport, pts);
+
     auto count = splatPoints(image, dynamicView, projection, viewport, pts);
     auto endTime = std::chrono::steady_clock::now();
     auto splatTimeSecs = std::chrono::duration<double>(endTime - startTime).count();
     if (uiServer) {
       state = uiServer->consumeState();
+      uiServer->sendHistogram(pointCounts);
       uiServer->sendPreviewImage(image);
       // Update projection:
       projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
