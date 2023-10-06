@@ -2,14 +2,12 @@
 
 #include <cstdlib>
 
-#include <opencv2/imgproc.hpp>
 #include <opencv2/highgui.hpp>
 
 #include <ipu/options.hpp>
 #include <ipu/ipu_utils.hpp>
 
-#include <splat/geometry.hpp>
-#include <splat/camera.hpp>
+#include <splat/cpu_rasteriser.hpp>
 #include <splat/file_io.hpp>
 #include <splat/serialise.hpp>
 
@@ -25,110 +23,39 @@ void addOptions(boost::program_options::options_description& desc) {
   ("ui-port", po::value<int>()->default_value(0), "Start a remote user-interface server on the specified port.");
 }
 
-struct TiledFramebuffer {
-  TiledFramebuffer(std::uint16_t w, std::uint16_t h, std::uint16_t tw, std::uint16_t th)
-  :
-    width(w), height(h),
-    tileWidth(tw), tileHeight(th)
-  {
-    numTilesAcross = width / tileWidth;
-    numTilesDown = height / tileHeight;
-    numTiles = numTilesAcross * numTilesDown;
-  }
+std::unique_ptr<ipu_utils::BuilderInterface> createIpuBuilder() {
+  using namespace poplar;
 
-  float pixCoordToTile(float row, float col) const {
-    float r = std::nearbyint(row);
-    float c = std::nearbyint(col);
+  ipu_utils::RuntimeConfig defaultConfig {
+    1, 1, // numIpus, numReplicas
+    "ipu_splatter", // exeName
+    false, false, false, // useIpuModel, saveExe, loadExe
+    false, true // compileOnly, deferredAttach
+  };
 
-    // Round to tile indices:
-    float tileColIndex = std::floor(c / tileWidth);
-    float tileRowIndex = std::floor(r / tileHeight);
+  auto ipuSplatter = std::make_unique<ipu_utils::LambdaBuilder>(
+    [&](Graph& graph, const Target& target, ipu_utils::ProgramManager& progs) {
+      const auto codeletFile = std::string(POPC_PREFIX) + "/codelets/splat/codelets.cpp";
+      const auto glmPath = std::string(POPC_PREFIX) + "/external/glm/";
+      const auto otherIncludes = std::string(POPC_PREFIX) + "/include/missing";
+      const auto includes = " -I " + glmPath + " -I " + otherIncludes;
+      ipu_utils::logger()->debug("POPC_PREFIX: {}", POPC_PREFIX);
+      graph.addCodelets(codeletFile, poplar::CodeletFileType::Auto, "-O3" + includes);
 
-    // Now flatten the tile indices:
-    float tileIndex = (tileRowIndex * numTilesAcross) + tileColIndex;
-    return tileIndex;
-  }
+      auto projectCs = graph.addComputeSet("project");
+      auto v1 = graph.addVertex(projectCs, "Transform4x4");
+      graph.setTileMapping(v1, 0);
 
-  std::uint16_t width;
-  std::uint16_t height;
-  std::uint16_t tileWidth;
-  std::uint16_t tileHeight;
-
-  // Use floats for these so that indexing
-  // calculations will be fast on IPU:
-  float numTilesAcross;
-  float numTilesDown;
-  float numTiles;
-};
-
-/// Apply modelview and projection transforms to points:
-std::vector<glm::vec4> projectPoints(const splat::Points& in, const glm::mat4& modelView, const glm::mat4& projection) {
-  std::vector<glm::vec4> out(in.size());
-  const auto mvp = projection * modelView;
-
-  #pragma omp parallel for schedule(static, 128) num_threads(32)
-  for (auto i = 0u; i < in.size(); ++i) {
-    out[i] = mvp * glm::vec4(in[i].p, 1.f);
-  }
-
-  return out;
-}
-
-/// Transform points from clip space into pixel coords and accumulate into an OpenCV image.
-/// Returns the number of splatted points (the number of points that pass the image clip test).
-std::uint32_t splatPoints(cv::Mat& image,
-                          const std::vector<glm::vec4>& clipCoords,
-                          const splat::Viewport& viewport,
-                          std::uint8_t value=25) {
-  std::uint32_t count = 0u;
-  const auto colour = cv::Vec3b(value, value, value);
-
-  #pragma omp parallel for schedule(static, 128) num_threads(32)
-  for (auto i = 0u; i < clipCoords.size(); ++i) {
-    // Convert from clip-space to pixel coords:
-    glm::vec2 windowCoords = viewport.clipSpaceToViewport(clipCoords[i]);
-    std::uint32_t r = windowCoords.y;
-    std::uint32_t c = windowCoords.x;
-
-    // Clip points to the image and splat:
-    if (r < image.rows && c < image.cols) {
-      image.at<cv::Vec3b>(r, c) += colour;
-
-      #pragma omp atomic update
-      count += 1;
+      program::Sequence runTest({program::Execute(projectCs)});
+      progs.add("project", runTest);
+    },
+    [&](Engine& engine, const Device& device, const ipu_utils::ProgramManager& progs) {
+      progs.run(engine, "project");
     }
-  }
+  );
 
-  return count;
-}
-
-void buildTileHistogram(std::vector<std::uint32_t>& counts,
-                        const TiledFramebuffer& fb,
-                        const std::vector<glm::vec4>& clipCoords,
-                        const splat::Viewport& viewport,
-                        std::uint8_t value=25) {
-  std::uint32_t count = 0u;
-  const auto colour = cv::Vec3b(value, value, value);
-
-  #pragma omp parallel for schedule(static, 128) num_threads(32)
-  for (auto& c : counts) {
-    c = 0u;
-  }
-
-  #pragma omp parallel for schedule(static, 128) num_threads(32)
-  for (auto& cs : clipCoords) {
-    // Convert from clip-space to pixel coords:
-    glm::vec2 windowCoords = viewport.clipSpaceToViewport(cs);
-    std::uint32_t r = windowCoords.y;
-    std::uint32_t c = windowCoords.x;
-
-    // Clip points to the image and splat:
-    if (r < fb.height && c < fb.width) {
-      auto tidx = fb.pixCoordToTile(r, c);
-      #pragma omp critical
-      counts[tidx] += 1;
-    }
-  }
+  ipuSplatter->setRuntimeConfig(defaultConfig);
+  return ipuSplatter;
 }
 
 int main(int argc, char** argv) {
@@ -172,6 +99,12 @@ int main(int argc, char** argv) {
   float y = 1279.f;
   auto tileId = fb.pixCoordToTile(x, y);
   ipu_utils::logger()->info("Tile index test. Pix coord {}, {} -> tile id: {}", x, y, tileId);
+
+  // auto ipuSplatter = createIpuBuilder();
+  // ipu_utils::GraphManager gm;
+  // gm.compileOrLoad(*ipuSplatter);
+  // gm.prepareEngine();
+  // gm.execute(*ipuSplatter);
 
   // Setup a user interface server if requested:
   std::unique_ptr<InterfaceServer> uiServer;
