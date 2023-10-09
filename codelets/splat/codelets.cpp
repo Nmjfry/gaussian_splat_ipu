@@ -15,21 +15,22 @@
 class Transform4x4 : public poplar::MultiVertex {
 public:
   poplar::Input<poplar::Vector<float>> matrix;
-  poplar::InOut<poplar::Vector<float>> vectors;
+  poplar::Input<poplar::Vector<float>> vertsIn;
+  poplar::Output<poplar::Vector<float>> vertsOut;
 
   // This implementation achieves approx 0.68 FLOPs/cycle:
   bool compute(unsigned workerId) {
     const auto startIndex = 4 * workerId;
-    for (auto v = startIndex; v < vectors.size(); v += 4 * numWorkers()) {
-      float x = vectors[v + 0];
-      float y = vectors[v + 1];
-      float z = vectors[v + 2];
-      float w = vectors[v + 3];
+    for (auto v = startIndex; v < vertsIn.size(); v += 4 * numWorkers()) {
+      float x = vertsIn[v + 0];
+      float y = vertsIn[v + 1];
+      float z = vertsIn[v + 2];
+      float w = vertsIn[v + 3];
       for (auto i = 0u; i < 4u; ++i) {
-        vectors[v + i] = matrix[4 * i + 0] * x +
-                         matrix[4 * i + 1] * y +
-                         matrix[4 * i + 2] * z +
-                         matrix[4 * i + 3] * w;
+        vertsOut[v + i] = matrix[4 * i + 0] * x +
+                          matrix[4 * i + 1] * y +
+                          matrix[4 * i + 2] * z +
+                          matrix[4 * i + 3] * w;
       }
     }
     return true;

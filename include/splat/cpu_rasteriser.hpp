@@ -9,6 +9,8 @@
 #include <splat/geometry.hpp>
 #include <splat/camera.hpp>
 
+namespace splat {
+
 struct TiledFramebuffer {
   TiledFramebuffer(std::uint16_t w, std::uint16_t h, std::uint16_t tw, std::uint16_t th)
   :
@@ -46,7 +48,8 @@ struct TiledFramebuffer {
 };
 
 /// Apply modelview and projection transforms to points:
-std::vector<glm::vec4> projectPoints(const splat::Points& in, const glm::mat4& modelView, const glm::mat4& projection);
+void projectPoints(const splat::Points& in, const glm::mat4& projection, const glm::mat4& modelView,
+                   std::vector<glm::vec4>& out);
 
 /// Transform points from clip space into pixel coords and accumulate into an OpenCV image.
 /// Returns the number of splatted points (the number of points that pass the image clip test).
@@ -60,3 +63,5 @@ void buildTileHistogram(std::vector<std::uint32_t>& counts,
                         const std::vector<glm::vec4>& clipCoords,
                         const splat::Viewport& viewport,
                         std::uint8_t value=25);
+
+} // end of namespace splat

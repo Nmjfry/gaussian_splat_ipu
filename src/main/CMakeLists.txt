@@ -8,6 +8,6 @@ target_link_libraries(splat
   Boost::program_options
   ${OpenCV_LIBS}
   OpenMP::OpenMP_CXX
-  ${POPLAR_LINK_LIBRARIES}
   splat_utils
+  ${POPLAR_LINK_LIBRARIES}
 )

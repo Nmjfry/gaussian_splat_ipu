@@ -2,17 +2,17 @@
 
 #include <splat/cpu_rasteriser.hpp>
 
+namespace splat {
 
-std::vector<glm::vec4> projectPoints(const splat::Points& in, const glm::mat4& modelView, const glm::mat4& projection) {
-  std::vector<glm::vec4> out(in.size());
+void projectPoints(const splat::Points& in, const glm::mat4& projection, const glm::mat4& modelView,
+                   std::vector<glm::vec4>& out) {
+  out.resize(in.size());
   const auto mvp = projection * modelView;
 
   #pragma omp parallel for schedule(static, 128) num_threads(32)
   for (auto i = 0u; i < in.size(); ++i) {
     out[i] = mvp * glm::vec4(in[i].p, 1.f);
   }
-
-  return out;
 }
 
 std::uint32_t splatPoints(cv::Mat& image,
@@ -70,3 +70,4 @@ void buildTileHistogram(std::vector<std::uint32_t>& counts,
   }
 }
 
+} // end of namespace splat

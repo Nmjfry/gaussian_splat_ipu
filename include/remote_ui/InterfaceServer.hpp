@@ -25,23 +25,15 @@ const std::vector<std::string> packetTypes {
     "stop",                // Tell server to stop rendering and exit (client -> server)
     "detach",              // Detach the remote-ui but continue: server can destroy the
                            // communication interface and continue (client -> server)
-    "progress",            // Send render progress (server -> client)
-    "sample_rate",         // Send throughput measurement (server -> client)
     "env_rotation",        // Update environment light rotation (client -> server)
     "exposure",            // Update tone-map exposure (client -> server)
     "gamma",               // Update tone-map gamma (client -> server)
     "fov",                 // Update field-of-view (bi-directional)
-    "load_nif",            // Insruct server to load a new
-                           // NIF environemnt light (client -> server)
     "render_preview",      // used to send compressed video packets
                            // for render preview (server -> client)
-    "hdr_header",          // Header for sending full uncompressed HDR
-                           // image data (server -> client).
-    "hdr_packet",          // Packet containing a portion of the full uncompressed
-                           // HDR image (server -> client).
-    "interactive_samples", // New value for interactive samples per step  (client -> server)
     "ready",               // Used to sync with the other side once all other subscribers are ready (bi-directional)
     "tile_histogram",      // Histogram tile workload distribution (server -> client)
+    "device",              // Tell server which device to use (cpu, ipu) (client -> server)
 };
 
 // Struct and serialize function for HDR
@@ -155,17 +147,10 @@ class InterfaceServer {
                                         stateUpdated = true;
                                       });
 
-      auto subs7 = receiver.subscribe("load_nif",
+      auto subs7 = receiver.subscribe("device",
                                       [&](const ComPacket::ConstSharedPacket& packet) {
-                                        deserialise(packet, state.newNif);
-                                        ipu_utils::logger()->trace("Received new NIF path: {}", state.newNif);
-                                        stateUpdated = true;
-                                      });
-
-      auto subs8 = receiver.subscribe("interactive_samples",
-                                      [&](const ComPacket::ConstSharedPacket& packet) {
-                                        deserialise(packet, state.interactiveSamples);
-                                        ipu_utils::logger()->trace("Interactive samples new value: {}", state.interactiveSamples);
+                                        deserialise(packet, state.device);
+                                        ipu_utils::logger()->trace("Received new device: {}", state.device);
                                         stateUpdated = true;
                                       });
 
@@ -199,8 +184,7 @@ public:
     float exposure = 0.f;
     float gamma = 2.2f;
     float fov = 90.f;
-    std::uint32_t interactiveSamples;
-    std::string newNif;
+    std::string device = "cpu";
     bool stop = false;
     bool detach = false;
   };
@@ -209,7 +193,6 @@ public:
   State consumeState() {
     State tmp = state;
     stateUpdated = false;  // Clear the update flag.
-    state.newNif.clear();  // Clear model load request.
     return tmp;
   }
 

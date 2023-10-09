@@ -6,8 +6,10 @@
 
 #include <ipu/options.hpp>
 #include <ipu/ipu_utils.hpp>
+#include <ipu/io_utils.hpp>
 
 #include <splat/cpu_rasteriser.hpp>
+#include <splat/ipu_rasteriser.hpp>
 #include <splat/file_io.hpp>
 #include <splat/serialise.hpp>
 
@@ -23,7 +25,7 @@ void addOptions(boost::program_options::options_description& desc) {
   ("ui-port", po::value<int>()->default_value(0), "Start a remote user-interface server on the specified port.");
 }
 
-std::unique_ptr<ipu_utils::BuilderInterface> createIpuBuilder() {
+std::unique_ptr<splat::IpuSplatter> createIpuBuilder(const splat::Points& pts) {
   using namespace poplar;
 
   ipu_utils::RuntimeConfig defaultConfig {
@@ -33,27 +35,7 @@ std::unique_ptr<ipu_utils::BuilderInterface> createIpuBuilder() {
     false, true // compileOnly, deferredAttach
   };
 
-  auto ipuSplatter = std::make_unique<ipu_utils::LambdaBuilder>(
-    [&](Graph& graph, const Target& target, ipu_utils::ProgramManager& progs) {
-      const auto codeletFile = std::string(POPC_PREFIX) + "/codelets/splat/codelets.cpp";
-      const auto glmPath = std::string(POPC_PREFIX) + "/external/glm/";
-      const auto otherIncludes = std::string(POPC_PREFIX) + "/include/missing";
-      const auto includes = " -I " + glmPath + " -I " + otherIncludes;
-      ipu_utils::logger()->debug("POPC_PREFIX: {}", POPC_PREFIX);
-      graph.addCodelets(codeletFile, poplar::CodeletFileType::Auto, "-O3" + includes);
-
-      auto projectCs = graph.addComputeSet("project");
-      auto v1 = graph.addVertex(projectCs, "Transform4x4");
-      graph.setTileMapping(v1, 0);
-
-      program::Sequence runTest({program::Execute(projectCs)});
-      progs.add("project", runTest);
-    },
-    [&](Engine& engine, const Device& device, const ipu_utils::ProgramManager& progs) {
-      progs.run(engine, "project");
-    }
-  );
-
+  auto ipuSplatter = std::make_unique<splat::IpuSplatter>(pts);
   ipuSplatter->setRuntimeConfig(defaultConfig);
   return ipuSplatter;
 }
@@ -91,7 +73,7 @@ int main(int argc, char** argv) {
   const float aspect = image.cols / (float)image.rows;
 
   // Construct some tiled framebuffer histograms:
-  TiledFramebuffer fb(image.cols, image.rows, 40, 16);
+  splat::TiledFramebuffer fb(image.cols, image.rows, 40, 16);
   auto pointCounts = std::vector<std::uint32_t>(fb.numTiles, 0u);
 
   ipu_utils::logger()->info("Number of tiles in framebuffer: {}", fb.numTiles);
@@ -100,11 +82,10 @@ int main(int argc, char** argv) {
   auto tileId = fb.pixCoordToTile(x, y);
   ipu_utils::logger()->info("Tile index test. Pix coord {}, {} -> tile id: {}", x, y, tileId);
 
-  // auto ipuSplatter = createIpuBuilder();
-  // ipu_utils::GraphManager gm;
-  // gm.compileOrLoad(*ipuSplatter);
-  // gm.prepareEngine();
-  // gm.execute(*ipuSplatter);
+  auto ipuSplatter = createIpuBuilder(pts);
+
+  ipu_utils::GraphManager gm;
+  gm.compileOrLoad(*ipuSplatter);
 
   // Setup a user interface server if requested:
   std::unique_ptr<InterfaceServer> uiServer;
@@ -129,11 +110,23 @@ int main(int argc, char** argv) {
   ipu_utils::logger()->info("Point bounds (eye space): {}", bbInCamera);
   auto projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
 
+  ipuSplatter->updateModelViewProjection(modelView * projection);
+  gm.prepareEngine();
+
   auto dynamicView = modelView;
+  std::vector<glm::vec4> clipSpace;
   do {
     auto startTime = std::chrono::steady_clock::now();
     image = 0;
-    const auto clipSpace = projectPoints(pts, dynamicView, projection);
+
+    if (state.device == "cpu") {
+      projectPoints(pts, projection, dynamicView, clipSpace);
+    } else if (state.device == "ipu") {
+      ipuSplatter->updateModelViewProjection(projection * dynamicView);
+      gm.execute(*ipuSplatter);
+      ipuSplatter->getProjectedPoints(clipSpace);
+    }
+
     buildTileHistogram(pointCounts, fb, clipSpace, viewport);
     auto count = splatPoints(image, clipSpace, viewport);
 

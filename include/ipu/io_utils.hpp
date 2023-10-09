@@ -4,17 +4,22 @@
 
 #include <set>
 #include <vector>
+#include <iostream>
+#include <utility>
 
 #include "ipu_utils.hpp"
 #include <poputil/VarStructure.hpp>
+#include <poplar/Interval.hpp>
 
 template <typename T1, typename T2>
+inline
 std::ostream& operator<<(std::ostream& s, const std::pair<T1, T2>& p) {
   s << "(" << p.first << ", " << p.second << ")";
   return s;
 }
 
 template <typename T>
+inline
 std::ostream& operator<<(std::ostream& s, const std::vector<T>& v) {
   for (const auto& d : v) {
     s << d << " ";
@@ -23,6 +28,7 @@ std::ostream& operator<<(std::ostream& s, const std::vector<T>& v) {
 }
 
 template <typename T>
+inline
 std::ostream& operator<<(std::ostream& s, const std::vector<std::vector<T>>& vv) {
   for (const auto& v : vv) {
     if (v.empty()) {
@@ -38,11 +44,18 @@ std::ostream& operator<<(std::ostream& s, const std::vector<std::vector<T>>& vv)
 }
 
 template <typename T>
-inline std::ostream& operator<<(std::ostream& os, const std::set<T>& s) {
+inline
+std::ostream& operator<<(std::ostream& os, const std::set<T>& s) {
   for (auto& k : s) {
     os << k << " ";
   }
   return os;
+}
+
+inline
+std::ostream& operator<<(std::ostream& s, const poplar::Interval& p) {
+  s << "(" << p.lower() << ", " << p.upper() << ")";
+  return s;
 }
 
 inline void logTensorInfo(poplar::Graph& g, poplar::Tensor t) {
