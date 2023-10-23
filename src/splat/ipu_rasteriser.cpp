@@ -48,8 +48,48 @@ void IpuSplatter::getProjectedPoints(std::vector<glm::vec4>& pts) const {
   }
 }
 
+/// Distribute elements across tiles and add padding such that the number of elements on a
+/// tile is always divisible by grainSize (padding is added to the last tile guarantee this).
+///
+/// Returns a padded and correctly tile mapped tensor.
+poplar::Tensor applyTileMappingAndPad(poplar::Graph& g, const poplar::Tensor& input, std::size_t grainSize) {
+  ipu_utils::logger()->info("Input num elements: {}", input.numElements());
+  const double numTiles = g.getTarget().getNumTiles();
+  double grainsPerTile = std::ceil(input.numElements() / (numTiles * grainSize));
+  double elementsPerTile = grainsPerTile * grainSize;
+  double fullTiles = std::floor(input.numElements() / elementsPerTile);
+  double remainingElements = input.numElements() - (fullTiles * elementsPerTile);
+  double paddedRemainder = std::ceil(remainingElements / grainSize) * grainSize;
+
+  ipu_utils::logger()->info("Upper bound elements per tile: {}", elementsPerTile);
+  ipu_utils::logger()->info("Full tiles: {}", fullTiles);
+  ipu_utils::logger()->info("Remaining elements: {}", remainingElements);
+  ipu_utils::logger()->info("Padded elements on last tile: {}", paddedRemainder);
+  ipu_utils::logger()->info("Padding: {}", paddedRemainder - remainingElements);
+
+  // Add zero padding:
+  const std::size_t padding = paddedRemainder - remainingElements;
+  auto zeroPadding = g.addConstant(input.elementType(), {padding}, 0, "vert_padding");
+
+  auto paddedInput = poplar::concat({input, zeroPadding}, 0);
+  ipu_utils::logger()->info("Padded shape: {}", paddedInput.shape());
+
+  auto sliceStart = 0u;
+  auto t = 0u;
+  std::size_t totalTiles = fullTiles;
+  for (t; t < totalTiles; ++t) {
+    const auto sliceEnd = sliceStart + elementsPerTile;
+    g.setTileMapping(paddedInput.slice(sliceStart, sliceEnd), t);
+    sliceStart = sliceEnd;
+  }
+
+  // Last tile has fewer elements:
+  g.setTileMapping(paddedInput.slice(sliceStart, sliceStart + paddedRemainder), t);
+
+  return paddedInput;
+}
+
 void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
-  // Use a small virtual graph for debugging:
   auto vg = graph.createVirtualGraph(0u, 1440u);
 
   const auto codeletFile = std::string(POPC_PREFIX) + "/codelets/splat/codelets.cpp";
@@ -71,15 +111,17 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   // Map the point cloud vertices across all tiles but specify a grain size so that 4 vectors
   // do not get split in the middle:
   inputVertices.buildTensor(vg, FLOAT, {hostVertices.size()});
-  poputil::mapTensorLinearlyWithOffset(vg, inputVertices, 128, 16, 0u);
+  auto paddedInput = applyTileMappingAndPad(vg, inputVertices.get(), 4 * 8);
+
   // Clone the input to make the output:
-  outputVertices = vg.clone(inputVertices);
+  auto paddedOutput = vg.clone(paddedInput);
+  outputVertices = paddedOutput.slice(0u, inputVertices.numElements());
 
   // Build a compute set to transform the points:
   auto projectCs = vg.addComputeSet("project");
 
   // Get the tile mapping and connect the vertices:
-  const auto tm = vg.getTileMapping(inputVertices);
+  const auto tm = vg.getTileMapping(paddedInput);
   for (auto t = 0u; t < tm.size(); ++t) {
     const auto& m = tm[t];
     if (m.size() > 1u) {
@@ -87,10 +129,18 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
     }
     if (m.size() > 0u) {
       // Add a transform vertex to process the points connecting the same slices of input and output:
-      auto v = vg.addVertex(projectCs, "Transform4x4");
+      auto v = vg.addVertex(projectCs, "Transform4x4_intrinsics");
       vg.setTileMapping(v, t);
-      vg.connect(v["vertsIn"], inputVertices.get().slice(m.front()));
-      vg.connect(v["vertsOut"], outputVertices.get().slice(m.front()));
+      auto sliceIn = paddedInput.slice(m.front());
+      auto sliceOut = paddedOutput.slice(m.front());
+      vg.connect(v["vertsIn"], sliceIn);
+      vg.connect(v["vertsOut"], sliceOut);
+
+      const auto vertsThisTile = sliceIn.numElements() / 4;
+      if (vertsThisTile % 8 != 0) {
+        ipu_utils::logger()->error("Tile {} has {} vertices which is not a multiple of 8", t, vertsThisTile);
+        throw std::runtime_error("Vertices per tile must be a multiple of 8 to use the AMP.");
+      }
 
       // Add the tile local MVP matrix variable and add to the broadcast program:
       auto localMvp = vg.clone(modelViewProjection, "mvp_tile_" + std::to_string(t));

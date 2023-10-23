@@ -15,6 +15,8 @@
 
 #include <remote_ui/InterfaceServer.hpp>
 
+#include <pvti/pvti.hpp>
+
 void addOptions(boost::program_options::options_description& desc) {
   namespace po = boost::program_options;
   desc.add_options()
@@ -22,7 +24,9 @@ void addOptions(boost::program_options::options_description& desc) {
   ("input,o", po::value<std::string>()->required(), "Input XYZ file.")
   ("log-level", po::value<std::string>()->default_value("info"),
    "Set the log level to one of the following: 'trace', 'debug', 'info', 'warn', 'err', 'critical', 'off'.")
-  ("ui-port", po::value<int>()->default_value(0), "Start a remote user-interface server on the specified port.");
+  ("ui-port", po::value<int>()->default_value(0), "Start a remote user-interface server on the specified port.")
+  ("device", po::value<std::string>()->default_value("cpu"),
+   "Choose the render device");
 }
 
 std::unique_ptr<splat::IpuSplatter> createIpuBuilder(const splat::Points& pts) {
@@ -41,6 +45,8 @@ std::unique_ptr<splat::IpuSplatter> createIpuBuilder(const splat::Points& pts) {
 }
 
 int main(int argc, char** argv) {
+  pvti::TraceChannel traceChannel = {"splatter"};
+
   boost::program_options::options_description desc;
   addOptions(desc);
   boost::program_options::variables_map args;
@@ -55,6 +61,7 @@ int main(int argc, char** argv) {
   auto xyzFile = args["input"].as<std::string>();
   auto pts = splat::loadXyz(std::ifstream(xyzFile));
   splat::Bounds3f bb(pts);
+  ipu_utils::logger()->info("Total point count: {}", pts.size());
   ipu_utils::logger()->info("Point bounds (world space): {}", bb);
 
   // Translate all points so the centroid is zero then negate the z-axis:
@@ -83,7 +90,6 @@ int main(int argc, char** argv) {
   ipu_utils::logger()->info("Tile index test. Pix coord {}, {} -> tile id: {}", x, y, tileId);
 
   auto ipuSplatter = createIpuBuilder(pts);
-
   ipu_utils::GraphManager gm;
   gm.compileOrLoad(*ipuSplatter);
 
@@ -91,6 +97,7 @@ int main(int argc, char** argv) {
   std::unique_ptr<InterfaceServer> uiServer;
   InterfaceServer::State state;
   state.fov = glm::radians(40.f);
+  state.device = args.at("device").as<std::string>();
   auto uiPort = args.at("ui-port").as<int>();
   if (uiPort) {
     uiServer.reset(new InterfaceServer(uiPort));
@@ -120,22 +127,29 @@ int main(int argc, char** argv) {
     image = 0;
 
     if (state.device == "cpu") {
+      pvti::Tracepoint scoped(&traceChannel, "mvp_transform_cpu");
       projectPoints(pts, projection, dynamicView, clipSpace);
     } else if (state.device == "ipu") {
+      pvti::Tracepoint scoped(&traceChannel, "mvp_transform_ipu");
       ipuSplatter->updateModelViewProjection(projection * dynamicView);
       gm.execute(*ipuSplatter);
       ipuSplatter->getProjectedPoints(clipSpace);
     }
 
+    pvti::Tracepoint::begin(&traceChannel, "splatting");
     buildTileHistogram(pointCounts, fb, clipSpace, viewport);
     auto count = splatPoints(image, clipSpace, viewport);
+    pvti::Tracepoint::end(&traceChannel, "splatting");
 
     auto endTime = std::chrono::steady_clock::now();
     auto splatTimeSecs = std::chrono::duration<double>(endTime - startTime).count();
+
     if (uiServer) {
+      pvti::Tracepoint scoped(&traceChannel, "ui-update");
       state = uiServer->consumeState();
       uiServer->sendHistogram(pointCounts);
       uiServer->sendPreviewImage(image);
+
       // Update projection:
       projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
       // Update modelview:
@@ -143,7 +157,6 @@ int main(int argc, char** argv) {
     } else {
       // Only log these if not in interactive mode:
       ipu_utils::logger()->info("Splat time: {} points/sec: {}", splatTimeSecs, pts.size()/splatTimeSecs);
-      ipu_utils::logger()->info("Total point count: {}", pts.size());
       ipu_utils::logger()->info("Splatted point count: {}", count);
     }
   } while (uiServer && state.stop == false);
