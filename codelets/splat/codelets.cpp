@@ -140,7 +140,8 @@ void zeroFpAccumulators() {
 
 class Transform4x4_amp_rpt : public poplar::MultiVertex {
 public:
-  poplar::InOut<poplar::Vector<float, poplar::VectorLayout::SPAN, 32, true>> vectors;
+  poplar::Input<poplar::Vector<float, poplar::VectorLayout::SPAN, 32, true>> vertsIn;
+  poplar::Output<poplar::Vector<float, poplar::VectorLayout::SPAN, 32, true>> vertsOut;
 
   bool compute(unsigned workerId) {
     zeroFpAccumulators();
@@ -149,9 +150,9 @@ public:
     constexpr unsigned stride = 8 * numWorkers();
     constexpr unsigned step = 4 * numWorkers() - 3;
     // Ensure these pointers go in consecutive addresses:
-    register float* srcPtr asm("$m2") = &vectors[startIndex];
-    register float* dstPtr asm("$m3") = &vectors[startIndex];
-    const int span = vectors.size() - startIndex;
+    register const float* srcPtr asm("$m2") = &vertsIn[startIndex];
+    register float* dstPtr asm("$m3") = &vertsOut[startIndex];
+    const int span = vertsIn.size() - startIndex;
     unsigned iterations = span < 0 ? 0 : span / stride;
 
     // This is the same vertex as Transform4x4_amp_full_pipeline but in the inner loop

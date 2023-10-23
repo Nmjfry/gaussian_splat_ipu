@@ -129,8 +129,11 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
     }
     if (m.size() > 0u) {
       // Add a transform vertex to process the points connecting the same slices of input and output:
-      auto v = vg.addVertex(projectCs, "Transform4x4_intrinsics");
+      auto v = vg.addVertex(projectCs, "Transform4x4_amp_rpt");
+      auto vs = vg.addVertex(projectCs, "LoadMatrix");
       vg.setTileMapping(v, t);
+      vg.setTileMapping(vs, t);
+
       auto sliceIn = paddedInput.slice(m.front());
       auto sliceOut = paddedOutput.slice(m.front());
       vg.connect(v["vertsIn"], sliceIn);
@@ -145,7 +148,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       // Add the tile local MVP matrix variable and add to the broadcast program:
       auto localMvp = vg.clone(modelViewProjection, "mvp_tile_" + std::to_string(t));
       vg.setTileMapping(localMvp, t);
-      vg.connect(v["matrix"], localMvp.flatten());
+      vg.connect(vs["matrix"], localMvp.flatten());
       broadcastMvp.add(program::Copy(modelViewProjection, localMvp));
     }
   }
