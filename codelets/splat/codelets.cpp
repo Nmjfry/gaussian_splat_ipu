@@ -11,7 +11,10 @@
 #endif
 
 // Plain C++ Multi-Vertex to transform every 4x1 vector
-// in an array by the same 4x4 transformation matrix:
+// in an array by the same 4x4 transformation matrix.
+// This is here as a reference to show what the
+// accumulating matrix product (AMP) engine assembly
+// vertices below are doing.
 class Transform4x4 : public poplar::MultiVertex {
 public:
   poplar::Input<poplar::Vector<float>> matrix;
@@ -37,46 +40,6 @@ public:
   }
 };
 
-class Transform4x4_intrinsics : public poplar::MultiVertex {
-public:
-  poplar::Input<poplar::Vector<float, poplar::VectorLayout::SPAN, 8>> matrix;
-  poplar::Input<poplar::Vector<float, poplar::VectorLayout::SPAN, 8>> vertsIn;
-  poplar::Output<poplar::Vector<float, poplar::VectorLayout::SPAN, 8>> vertsOut;
-
-  // This implementation achieves approx 1.03 FLOPs/cycle:
-  bool compute(unsigned workerId) {
-    constexpr auto elementsPerWorker = 8;
-    const auto startIndex = elementsPerWorker * workerId;
-    const float2* inPtr = reinterpret_cast<const float2*>(&vertsIn[startIndex]);
-    float* outPtr = reinterpret_cast<float*>(&vertsOut[startIndex]);
-    const float* const endPtr = outPtr + vertsOut.size() - startIndex;
-    while (outPtr < endPtr) {
-      float2 xy = ipu::load_postinc(&inPtr, 1);
-      float2 zw = ipu::load_postinc(&inPtr, 1);
-      for (auto i = 0u; i < 4u; ++i) {
-        const float2 m01 = {matrix[4 * i + 0], matrix[4 * i + 1]};
-        const float2 m23 = {matrix[4 * i + 2], matrix[4 * i + 3]};
-        const float2 v01 = (m01 * xy) + (m23 * zw);
-        const float result = v01[0] + v01[1];
-        *outPtr = result;
-        outPtr += 1;
-      }
-      xy = ipu::load_postinc(&inPtr, 1);
-      zw = ipu::load_postinc(&inPtr, 4 * numWorkers() - 3);
-      for (auto i = 0u; i < 4u; ++i) {
-        const float2 m01 = {matrix[4 * i + 0], matrix[4 * i + 1]};
-        const float2 m23 = {matrix[4 * i + 2], matrix[4 * i + 3]};
-        const float2 v01 = (m01 * xy) + (m23 * zw);
-        const float result = v01[0] + v01[1];
-        *outPtr = result;
-        outPtr += 1;
-      }
-      outPtr += elementsPerWorker * (numWorkers() - 1);
-    }
-    return true;
-  }
-};
-
 #define CCCSLOAD 80
 
 // Template class to calculate register values
@@ -86,6 +49,9 @@ struct CWEI {
   static constexpr unsigned value = M + (N * 4);
 };
 
+// This vertex loads the AMP engine weight matrix. This has to be done
+// in supervisor mode. The weight registers are automatically zeroed on
+// entering supervisor mode so we only need to load the non-zero parts.
 class LoadMatrix : public poplar::SupervisorVertex {
 public:
   // Specify the alignment and that the matrix must be in interleaved memory:
@@ -93,7 +59,7 @@ public:
 
   bool compute() __attribute__((target("supervisor"))) {
 
-    // Write the first load address to the $CCCSLOAD register:
+    // Write the first address to load from into the $CCCSLOAD register:
     const auto loadStart = (unsigned)&matrix[0];
 
     // We want to load the 4x4 transform to upper left 4x4 block of the 16x16
@@ -127,6 +93,7 @@ public:
   }
 };
 
+// Small piece of ASM required to zero the AMP accumulator registers:
 inline
 void zeroFpAccumulators() {
   asm(R"(
@@ -138,6 +105,38 @@ void zeroFpAccumulators() {
   : "$a0");
 }
 
+// This vertex uses the Accumulating Matrix Product (AMP) engine to transform 4x1 vectors by
+// a single fixed 4x4 matrix. I.e. it is an optimised verison of the Transform4x4 vertex above.
+//
+// Accumulating Matrix Product (AMP) engine.
+// =========================================
+//
+// A matrix-vector product can be interpreted as taking a linear combination of the columns of
+// the matrix. I.e. a matrix projects a vector into its "column space": the vector space spanned
+// by its columns. This is exactly how the AMP engine works: it is a "column scaling" engine (a
+// systolic array) where partially scaled columns are fed to the next unit in the array and
+// results accumulated until the results drop out of the end of the pipeline.
+//
+// Each amp instruction (f32sisoamp is used here, but there are different variants) takes scalar
+// elements from the input vector one by one and feeds that scalar to every engine. Each engine
+// then multiples the scalar with elements from the weight matrix and passes the intermediate
+// result to the next engine which will add the contribution of the next column to it.
+//
+// Execution is organised into phases. Different phases connect different weights to different
+// engines. These connections are made such that each engine in a phase is responsible for scaling
+// a part of the column of the weight matrix and accumulating the result to the accumulators. So
+// each phase scales and accumulates one column from the weight matrix. Once all phases are complete
+// the results are ready, but can only be extracted from the pipeline two elements at a time (and
+// only on even phases for f32sisoamp).
+//
+// Additionally the AMP instruction can take a partial result which is also added to the scaled
+// column. This allows executing larger matrix multiples by decomposing them into smaller blocks:
+// each block can load a partial result, add to it, and eventually save result back to memory (which
+// can be reloaded again later and so on). In our use case here, we do not need partial inputs so
+// they are always zero. This also enables us to clear the accumulators ready for the next iteration.
+// However, this does mean that in this application the available FLOPS relating to partials are not
+// utilised, so we can not expect to reach the peak FLOP rate of the machine where the calculation
+// does not actively load partials.
 class Transform4x4_amp_rpt : public poplar::MultiVertex {
 public:
   poplar::Input<poplar::Vector<float, poplar::VectorLayout::SPAN, 32, true>> vertsIn;
@@ -155,9 +154,6 @@ public:
     const int span = vertsIn.size() - startIndex;
     unsigned iterations = span < 0 ? 0 : span / stride;
 
-    // This is the same vertex as Transform4x4_amp_full_pipeline but in the inner loop
-    // we use triple packed adresses and an instruction that simultaneously loads/stores
-    // and increments two pointers to reduce instructions.
     asm (R"(
       .allow_optimizations
 
@@ -174,7 +170,8 @@ public:
         f32sisoamp $azeros, $a1, $azeros, %[TAMP_F32_E4_P3]
       }
       {
-        // Note we use $a2:3 here to free up more dual issue slots later:
+        // Note we switch from using $a0:1 to using $a2:3 here to
+        // free up more dual issue slots later:
         ld64step $a2:3, $mzero, %[loadAddr]+=, %[step]
         f32sisoamp $azeros, $a0, $azeros, %[TAMP_F32_E4_P4]
       }
@@ -185,6 +182,8 @@ public:
         f32sisoamp $azeros, $a1, $azeros, %[TAMP_F32_E4_P5]
       }
       {
+        // Optimised load/store instructions (ldst64pace below) require
+        // triple packed addresses:
         tapack $m4:5, %[loadAddr], $mzero, %[storeAddr]
         f32sisoamp $azeros, $a2, $azeros, %[TAMP_F32_E4_P6]
       }
@@ -217,7 +216,7 @@ public:
           f32sisoamp $a2:3, $a0, $azeros, %[TAMP_F32_E4_P4]
         }
         {
-          // Use stride specification to jump the read pointer to the worker's next chunk:
+          // Use stride specification to jump the packed read pointer to the worker's next chunk:
           ldst64pace $a0:1, $a2:3, $m4:5+=, %[step], 0b0001
           f32sisoamp $azeros, $a1, $azeros, %[TAMP_F32_E4_P5]
         }
@@ -226,7 +225,7 @@ public:
           f32sisoamp $a2:3, $a0, $azeros, %[TAMP_F32_E4_P6]
         }
         {
-          // Use stride specification to jump the write pointer to the worker's next chunk:
+          // Use stride specification to jump the packed write pointer to the worker's next chunk:
           ldst64pace $a0:1, $a2:3, $m4:5+=, %[step], 0b0100 // At the end of the loop this is an over-read
           f32sisoamp $azeros, $a1, $azeros, %[TAMP_F32_E4_P7]
         }
