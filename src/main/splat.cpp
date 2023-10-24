@@ -95,8 +95,6 @@ int main(int argc, char** argv) {
   ipu_utils::GraphManager gm;
   gm.compileOrLoad(*ipuSplatter);
 
-  AsyncTask hostProcessing;
-
   // Setup a user interface server if requested:
   std::unique_ptr<InterfaceServer> uiServer;
   InterfaceServer::State state;
@@ -118,14 +116,31 @@ int main(int argc, char** argv) {
     modelView * glm::vec4(bb.min, 1.f),
     modelView * glm::vec4(bb.max, 1.f)
   );
+
   ipu_utils::logger()->info("Point bounds (eye space): {}", bbInCamera);
   auto projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
 
   ipuSplatter->updateModelViewProjection(modelView * projection);
   gm.prepareEngine();
 
-  auto dynamicView = modelView;
   std::vector<glm::vec4> clipSpace;
+  clipSpace.reserve(pts.size());
+
+  // Video is encoded and sent in a separate thread:
+  AsyncTask hostProcessing;
+  auto uiUpdateFunc = [&]() {
+    {
+      pvti::Tracepoint scoped(&traceChannel, "ui_update");
+      uiServer->sendHistogram(pointCounts);
+      uiServer->sendPreviewImage(*imagePtrBuffered);
+    }
+    {
+      pvti::Tracepoint scope(&traceChannel, "build_histogram");
+      buildTileHistogram(pointCounts, fb, clipSpace, viewport);
+    }
+  };
+
+  auto dynamicView = modelView;
   do {
     auto startTime = std::chrono::steady_clock::now();
     *imagePtr = 0;
@@ -140,27 +155,21 @@ int main(int argc, char** argv) {
       ipuSplatter->getProjectedPoints(clipSpace);
     }
 
-    pvti::Tracepoint::begin(&traceChannel, "splatting");
-    buildTileHistogram(pointCounts, fb, clipSpace, viewport);
-    auto count = splatPoints(*imagePtr, clipSpace, viewport);
-    pvti::Tracepoint::end(&traceChannel, "splatting");
+    unsigned count = 0u;
+    {
+      pvti::Tracepoint scope(&traceChannel, "splatting_cpu");
+      count = splatPoints(*imagePtr, clipSpace, viewport);
+    }
 
     auto endTime = std::chrono::steady_clock::now();
     auto splatTimeSecs = std::chrono::duration<double>(endTime - startTime).count();
 
     if (uiServer) {
-      // Encode and send video in separate thread:
-      state = uiServer->consumeState();
-
       hostProcessing.waitForCompletion();
       std::swap(imagePtr, imagePtrBuffered);
+      hostProcessing.run(uiUpdateFunc);
 
-      hostProcessing.run([&]() {
-        pvti::Tracepoint scoped(&traceChannel, "ui-update");
-        uiServer->sendHistogram(pointCounts);
-        uiServer->sendPreviewImage(*imagePtrBuffered);
-      });
-
+      state = uiServer->consumeState();
       // Update projection:
       projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
       // Update modelview:
@@ -175,22 +184,6 @@ int main(int argc, char** argv) {
   hostProcessing.waitForCompletion();
 
   cv::imwrite("test.png", *imagePtr);
-
-  auto count = 0u;
-  auto tile = 0u;
-  auto emptyTiles = 0u;
-  std::fstream of("out.txt");
-  for (auto& c : pointCounts) {
-    of << tile << " " << c << "\n";
-    tile += 1;
-    count += c;
-    if (c == 0) {
-      emptyTiles += 1;
-    }
-  }
-
-  ipu_utils::logger()->info("Histogram point count: {}", count);
-  ipu_utils::logger()->info("Tiles with no work to do: {}", emptyTiles);
 
   return EXIT_SUCCESS;
 }
