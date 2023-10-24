@@ -14,6 +14,7 @@
 #include <splat/serialise.hpp>
 
 #include <remote_ui/InterfaceServer.hpp>
+#include <remote_ui/AsyncTask.hpp>
 
 #include <pvti/pvti.hpp>
 
@@ -75,12 +76,13 @@ int main(int argc, char** argv) {
   }
 
   // Splat all the points into an OpenCV image:
-  cv::Mat image(720, 1280, CV_8UC3);
-  splat::Viewport viewport(0.f, 0.f, image.cols, image.rows);
-  const float aspect = image.cols / (float)image.rows;
+  auto imagePtr = std::make_unique<cv::Mat>(720, 1280, CV_8UC3);
+  auto imagePtrBuffered = std::make_unique<cv::Mat>(imagePtr->rows, imagePtr->cols, CV_8UC3);
+  splat::Viewport viewport(0.f, 0.f, imagePtr->cols, imagePtr->rows);
+  const float aspect = imagePtr->cols / (float)imagePtr->rows;
 
   // Construct some tiled framebuffer histograms:
-  splat::TiledFramebuffer fb(image.cols, image.rows, 40, 16);
+  splat::TiledFramebuffer fb(imagePtr->cols, imagePtr->rows, 40, 16);
   auto pointCounts = std::vector<std::uint32_t>(fb.numTiles, 0u);
 
   ipu_utils::logger()->info("Number of tiles in framebuffer: {}", fb.numTiles);
@@ -93,6 +95,8 @@ int main(int argc, char** argv) {
   ipu_utils::GraphManager gm;
   gm.compileOrLoad(*ipuSplatter);
 
+  AsyncTask hostProcessing;
+
   // Setup a user interface server if requested:
   std::unique_ptr<InterfaceServer> uiServer;
   InterfaceServer::State state;
@@ -102,7 +106,7 @@ int main(int argc, char** argv) {
   if (uiPort) {
     uiServer.reset(new InterfaceServer(uiPort));
     uiServer->start();
-    uiServer->initialiseVideoStream(image.cols, image.rows);
+    uiServer->initialiseVideoStream(imagePtr->cols, imagePtr->rows);
     uiServer->updateFov(state.fov);
   }
 
@@ -124,7 +128,7 @@ int main(int argc, char** argv) {
   std::vector<glm::vec4> clipSpace;
   do {
     auto startTime = std::chrono::steady_clock::now();
-    image = 0;
+    *imagePtr = 0;
 
     if (state.device == "cpu") {
       pvti::Tracepoint scoped(&traceChannel, "mvp_transform_cpu");
@@ -138,17 +142,24 @@ int main(int argc, char** argv) {
 
     pvti::Tracepoint::begin(&traceChannel, "splatting");
     buildTileHistogram(pointCounts, fb, clipSpace, viewport);
-    auto count = splatPoints(image, clipSpace, viewport);
+    auto count = splatPoints(*imagePtr, clipSpace, viewport);
     pvti::Tracepoint::end(&traceChannel, "splatting");
 
     auto endTime = std::chrono::steady_clock::now();
     auto splatTimeSecs = std::chrono::duration<double>(endTime - startTime).count();
 
     if (uiServer) {
-      pvti::Tracepoint scoped(&traceChannel, "ui-update");
+      // Encode and send video in separate thread:
       state = uiServer->consumeState();
-      uiServer->sendHistogram(pointCounts);
-      uiServer->sendPreviewImage(image);
+
+      hostProcessing.waitForCompletion();
+      std::swap(imagePtr, imagePtrBuffered);
+
+      hostProcessing.run([&]() {
+        pvti::Tracepoint scoped(&traceChannel, "ui-update");
+        uiServer->sendHistogram(pointCounts);
+        uiServer->sendPreviewImage(*imagePtrBuffered);
+      });
 
       // Update projection:
       projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
@@ -161,7 +172,9 @@ int main(int argc, char** argv) {
     }
   } while (uiServer && state.stop == false);
 
-  cv::imwrite("test.png", image);
+  hostProcessing.waitForCompletion();
+
+  cv::imwrite("test.png", *imagePtr);
 
   auto count = 0u;
   auto tile = 0u;
