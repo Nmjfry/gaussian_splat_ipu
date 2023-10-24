@@ -1,3 +1,5 @@
+// Copyright (c) 2023 Graphcore Ltd. All rights reserved.
+
 // Popc doesn't ship this file so add it:
 
 #ifndef __CFLOAT_HEADER
