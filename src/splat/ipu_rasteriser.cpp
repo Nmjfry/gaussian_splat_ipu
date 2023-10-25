@@ -49,17 +49,19 @@ void IpuSplatter::getProjectedPoints(std::vector<glm::vec4>& pts) const {
   }
 }
 
-/// Distribute elements across tiles and add padding such that the number of elements on a
-/// tile is always divisible by grainSize (padding is added to the last tile guarantee this).
-///
-/// Returns a padded and correctly tile mapped tensor.
-poplar::Tensor applyTileMappingAndPad(poplar::Graph& g, const poplar::Tensor& input, std::size_t grainSize) {
-  ipu_utils::logger()->info("Input num elements: {}", input.numElements());
+struct MappingInfo {
+  std::size_t padding;
+  std::size_t elementsPerTile;
+  std::size_t totalTiles;
+};
+
+MappingInfo calculateMapping(poplar::Graph& g, std::size_t numElements, std::size_t grainSize) {
+  ipu_utils::logger()->info("Input num elements: {}", numElements);
   const double numTiles = g.getTarget().getNumTiles();
-  double grainsPerTile = std::ceil(input.numElements() / (numTiles * grainSize));
+  double grainsPerTile = std::ceil(numElements / (numTiles * grainSize));
   double elementsPerTile = grainsPerTile * grainSize;
-  double fullTiles = std::floor(input.numElements() / elementsPerTile);
-  double remainingElements = input.numElements() - (fullTiles * elementsPerTile);
+  double fullTiles = std::floor(numElements / elementsPerTile);
+  double remainingElements = numElements - (fullTiles * elementsPerTile);
   double paddedRemainder = std::ceil(remainingElements / grainSize) * grainSize;
 
   ipu_utils::logger()->info("Upper bound elements per tile: {}", elementsPerTile);
@@ -68,26 +70,26 @@ poplar::Tensor applyTileMappingAndPad(poplar::Graph& g, const poplar::Tensor& in
   ipu_utils::logger()->info("Padded elements on last tile: {}", paddedRemainder);
   ipu_utils::logger()->info("Padding: {}", paddedRemainder - remainingElements);
 
-  // Add zero padding:
   const std::size_t padding = paddedRemainder - remainingElements;
-  auto zeroPadding = g.addConstant(input.elementType(), {padding}, 0, "vert_padding");
+  return MappingInfo{padding, std::size_t(elementsPerTile), std::size_t(fullTiles)};
+}
 
-  auto paddedInput = poplar::concat({input, zeroPadding}, 0);
-  ipu_utils::logger()->info("Padded shape: {}", paddedInput.shape());
-
+/// Distribute elements across tiles such that the number of elements on a
+/// tile is always divisible by grainSize. The tensor must have already been padded
+/// to a multiple of grain size.
+void applyTileMapping(poplar::Graph& g, const poplar::Tensor& paddedInput, const MappingInfo& info) {
   auto sliceStart = 0u;
   auto t = 0u;
-  std::size_t totalTiles = fullTiles;
-  for (t; t < totalTiles; ++t) {
-    const auto sliceEnd = sliceStart + elementsPerTile;
+  for (t; t < info.totalTiles; ++t) {
+    const auto sliceEnd = sliceStart + info.elementsPerTile;
     g.setTileMapping(paddedInput.slice(sliceStart, sliceEnd), t);
     sliceStart = sliceEnd;
   }
 
   // Last tile has fewer elements:
-  g.setTileMapping(paddedInput.slice(sliceStart, sliceStart + paddedRemainder), t);
-
-  return paddedInput;
+  auto lastSlice = paddedInput.slice(sliceStart, paddedInput.numElements());
+  ipu_utils::logger()->info("Size of slice on last tile: {}", lastSlice.numElements());
+  g.setTileMapping(lastSlice, t);
 }
 
 // Add a vertex to project vertices that uses vanilla C++ code.
@@ -144,12 +146,18 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   // tiles). If we use the AMP we need to have at least 8 4-vectors to fill the AMP pipeline so
   // the minimum grain size is 32:
   const auto grainSize = disableAMPVertices ? 4 : 4 * 8;
+  auto mapping = calculateMapping(vg, hostVertices.size(), grainSize);
+  auto paddedInput = vg.addVariable(FLOAT, {hostVertices.size() + mapping.padding}, "padded_verts_in");
+  applyTileMapping(vg, paddedInput, mapping);
 
-  inputVertices.buildTensor(vg, FLOAT, {hostVertices.size()});
-  auto paddedInput = applyTileMappingAndPad(vg, inputVertices.get(), grainSize);
+  // We only want to stream to a slice of the padded tensor:
+  inputVertices = paddedInput.slice(0, hostVertices.size());
+
+  ipu_utils::logger()->info("Size input: {}", inputVertices.numElements());
+  ipu_utils::logger()->info("Size of padded input: {}", paddedInput.numElements());
 
   // Clone the input to make the output:
-  auto paddedOutput = vg.clone(paddedInput);
+  auto paddedOutput = vg.clone(paddedInput, "verts_out");
   outputVertices = paddedOutput.slice(0u, inputVertices.numElements());
 
   // Build a compute set to transform the points:
