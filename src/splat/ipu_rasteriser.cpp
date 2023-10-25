@@ -13,10 +13,11 @@ using namespace poplar;
 namespace splat {
 
 /// Name the streamable tensors and take a reference to the point data:
-IpuSplatter::IpuSplatter(const Points& verts)
+IpuSplatter::IpuSplatter(const Points& verts, bool noAMP)
   : modelViewProjection("mvp"), inputVertices("verts_in"), outputVertices("verts_out"),
     transformMatrix(16),
-    initialised(false)
+    initialised(false),
+    disableAMPVertices(noAMP)
 {
   hostVertices.reserve(4 * verts.size());
   for (const auto& v : verts) {
@@ -89,6 +90,36 @@ poplar::Tensor applyTileMappingAndPad(poplar::Graph& g, const poplar::Tensor& in
   return paddedInput;
 }
 
+// Add a vertex to project vertices that uses vanilla C++ code.
+void addProjectionVertex(poplar::Graph& g, poplar::ComputeSet& cs, unsigned t,
+                         const poplar::Tensor& modelViewProjection, const poplar::Tensor& sliceIn, const poplar::Tensor& sliceOut) {
+  auto v = g.addVertex(cs, "Transform4x4");
+  g.setTileMapping(v, t);
+
+  g.connect(v["matrix"], modelViewProjection);
+  g.connect(v["vertsIn"], sliceIn);
+  g.connect(v["vertsOut"], sliceOut);
+}
+
+// Add a vertex to project vertices that uses is optimised using the tile's AMP engine.
+void addProjectionVertexAMP(poplar::Graph& g, poplar::ComputeSet& cs, unsigned t,
+                        const poplar::Tensor& modelViewProjection, const poplar::Tensor& sliceIn, const poplar::Tensor& sliceOut) {
+  auto v = g.addVertex(cs, "Transform4x4_amp");
+  auto vs = g.addVertex(cs, "LoadMatrix");
+  g.setTileMapping(v, t);
+  g.setTileMapping(vs, t);
+
+  g.connect(vs["matrix"], modelViewProjection);
+  g.connect(v["vertsIn"], sliceIn);
+  g.connect(v["vertsOut"], sliceOut);
+
+  const auto vertsThisTile = sliceIn.numElements() / 4;
+  if (vertsThisTile % 8 != 0) {
+    ipu_utils::logger()->error("Tile {} has {} vertices which is not a multiple of 8", t, vertsThisTile);
+    throw std::runtime_error("Vertices per tile must be a multiple of 8 to use the AMP.");
+  }
+}
+
 void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   auto vg = graph.createVirtualGraph(0u, 1440u);
 
@@ -108,17 +139,22 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   program::Sequence broadcastMvp;
   broadcastMvp.add(modelViewProjection.buildWrite(vg, true));
 
-  // Map the point cloud vertices across all tiles but specify a grain size so that 4 vectors
-  // do not get split in the middle:
+  // Map the point cloud vertices across all tiles. If we are not using AMP the only constraint
+  // is that the grain size must be a multiple of 4 (so that 4-vectors are not split between
+  // tiles). If we use the AMP we need to have at least 8 4-vectors to fill the AMP pipeline so
+  // the minimum grain size is 32:
+  const auto grainSize = disableAMPVertices ? 4 : 4 * 8;
+
   inputVertices.buildTensor(vg, FLOAT, {hostVertices.size()});
-  auto paddedInput = applyTileMappingAndPad(vg, inputVertices.get(), 4 * 8);
+  auto paddedInput = applyTileMappingAndPad(vg, inputVertices.get(), grainSize);
 
   // Clone the input to make the output:
   auto paddedOutput = vg.clone(paddedInput);
   outputVertices = paddedOutput.slice(0u, inputVertices.numElements());
 
   // Build a compute set to transform the points:
-  auto projectCs = vg.addComputeSet("project");
+  const auto csName = disableAMPVertices ? "project" : "project_amp";
+  auto projectCs = vg.addComputeSet(csName);
 
   // Get the tile mapping and connect the vertices:
   const auto tm = vg.getTileMapping(paddedInput);
@@ -128,28 +164,20 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       throw std::runtime_error("Expected vertices to be stored as a single contiguous region per tile.");
     }
     if (m.size() > 0u) {
-      // Add a transform vertex to process the points connecting the same slices of input and output:
-      auto v = vg.addVertex(projectCs, "Transform4x4_amp_rpt");
-      auto vs = vg.addVertex(projectCs, "LoadMatrix");
-      vg.setTileMapping(v, t);
-      vg.setTileMapping(vs, t);
-
-      auto sliceIn = paddedInput.slice(m.front());
-      auto sliceOut = paddedOutput.slice(m.front());
-      vg.connect(v["vertsIn"], sliceIn);
-      vg.connect(v["vertsOut"], sliceOut);
-
-      const auto vertsThisTile = sliceIn.numElements() / 4;
-      if (vertsThisTile % 8 != 0) {
-        ipu_utils::logger()->error("Tile {} has {} vertices which is not a multiple of 8", t, vertsThisTile);
-        throw std::runtime_error("Vertices per tile must be a multiple of 8 to use the AMP.");
-      }
-
-      // Add the tile local MVP matrix variable and add to the broadcast program:
+      // Add the tile local MVP matrix variable and append a copies that broadcast it to all tiles:
       auto localMvp = vg.clone(modelViewProjection, "mvp_tile_" + std::to_string(t));
       vg.setTileMapping(localMvp, t);
-      vg.connect(vs["matrix"], localMvp.flatten());
       broadcastMvp.add(program::Copy(modelViewProjection, localMvp));
+
+      auto sliceIn  = paddedInput.slice(m.front());
+      auto sliceOut = paddedOutput.slice(m.front());
+
+      if (disableAMPVertices) {
+        ipu_utils::logger()->warn("AMP vertex disabled on tile: {}", t);
+        addProjectionVertex(vg, projectCs, t, localMvp.flatten(), sliceIn, sliceOut);
+      } else {
+        addProjectionVertexAMP(vg, projectCs, t, localMvp.flatten(), sliceIn, sliceOut);
+      }
     }
   }
 

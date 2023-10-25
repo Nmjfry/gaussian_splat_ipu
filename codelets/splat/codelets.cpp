@@ -4,14 +4,21 @@
 #include <print.h>
 #include <poplar/StackSizeDefs.hpp>
 
+#include <glm/mat4x4.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
 #ifdef __IPU__
 #include <ipu_vector_math>
 #include <ipu_memory_intrinsics>
 #include <ipu_builtins.h>
 #endif
 
-// Plain C++ Multi-Vertex to transform every 4x1 vector
+// Multi-Vertex to transform every 4x1 vector
 // in an array by the same 4x4 transformation matrix.
+// Uses the OpenGL Math (GLM) library for demonstration
+// purposes (we do not expect this to be fast as GLM is
+// not optimised for IPU yet).
+//
 // This is here as a reference to show what the
 // accumulating matrix product (AMP) engine assembly
 // vertices below are doing.
@@ -21,20 +28,15 @@ public:
   poplar::Input<poplar::Vector<float>> vertsIn;
   poplar::Output<poplar::Vector<float>> vertsOut;
 
-  // This implementation achieves approx 0.68 FLOPs/cycle:
   bool compute(unsigned workerId) {
+    // Transpose because GLM storage order is column major:
+    const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
+
     const auto startIndex = 4 * workerId;
-    for (auto v = startIndex; v < vertsIn.size(); v += 4 * numWorkers()) {
-      float x = vertsIn[v + 0];
-      float y = vertsIn[v + 1];
-      float z = vertsIn[v + 2];
-      float w = vertsIn[v + 3];
-      for (auto i = 0u; i < 4u; ++i) {
-        vertsOut[v + i] = matrix[4 * i + 0] * x +
-                          matrix[4 * i + 1] * y +
-                          matrix[4 * i + 2] * z +
-                          matrix[4 * i + 3] * w;
-      }
+    for (auto i = startIndex; i < vertsIn.size(); i += 4 * numWorkers()) {
+      auto v = glm::make_vec4(&vertsIn[i]);
+      v = m * v;
+      memcpy(&vertsOut[i], glm::value_ptr(v), sizeof(v));
     }
     return true;
   }
@@ -137,7 +139,7 @@ void zeroFpAccumulators() {
 // However, this does mean that in this application the available FLOPS relating to partials are not
 // utilised, so we can not expect to reach the peak FLOP rate of the machine where the calculation
 // does not actively load partials.
-class Transform4x4_amp_rpt : public poplar::MultiVertex {
+class Transform4x4_amp : public poplar::MultiVertex {
 public:
   poplar::Input<poplar::Vector<float, poplar::VectorLayout::SPAN, 32, true>> vertsIn;
   poplar::Output<poplar::Vector<float, poplar::VectorLayout::SPAN, 32, true>> vertsOut;

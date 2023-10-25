@@ -15,7 +15,7 @@ typedef std::vector<Point3f> Points;
 
 class IpuSplatter : public ipu_utils::BuilderInterface {
 public:
-  IpuSplatter(const Points& pts);
+  IpuSplatter(const Points& pts, bool noAMP);
   virtual ~IpuSplatter() {}
 
   void updateModelViewProjection(const glm::mat4& mvp);
@@ -31,6 +31,7 @@ private:
   std::vector<float> transformMatrix;
   std::vector<float> hostVertices;
   std::atomic<bool> initialised;
+  const bool disableAMPVertices;
 };
 
 } // end of namespace splat

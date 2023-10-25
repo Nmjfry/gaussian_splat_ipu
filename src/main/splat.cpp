@@ -27,10 +27,12 @@ void addOptions(boost::program_options::options_description& desc) {
    "Set the log level to one of the following: 'trace', 'debug', 'info', 'warn', 'err', 'critical', 'off'.")
   ("ui-port", po::value<int>()->default_value(0), "Start a remote user-interface server on the specified port.")
   ("device", po::value<std::string>()->default_value("cpu"),
-   "Choose the render device");
+   "Choose the render device")
+  ("no-amp", po::bool_switch()->default_value(false),
+   "Disable use of optimised AMP codelets.");
 }
 
-std::unique_ptr<splat::IpuSplatter> createIpuBuilder(const splat::Points& pts) {
+std::unique_ptr<splat::IpuSplatter> createIpuBuilder(const splat::Points& pts, bool useAMP) {
   using namespace poplar;
 
   ipu_utils::RuntimeConfig defaultConfig {
@@ -40,7 +42,7 @@ std::unique_ptr<splat::IpuSplatter> createIpuBuilder(const splat::Points& pts) {
     false, true // compileOnly, deferredAttach
   };
 
-  auto ipuSplatter = std::make_unique<splat::IpuSplatter>(pts);
+  auto ipuSplatter = std::make_unique<splat::IpuSplatter>(pts, useAMP);
   ipuSplatter->setRuntimeConfig(defaultConfig);
   return ipuSplatter;
 }
@@ -91,7 +93,7 @@ int main(int argc, char** argv) {
   auto tileId = fb.pixCoordToTile(x, y);
   ipu_utils::logger()->info("Tile index test. Pix coord {}, {} -> tile id: {}", x, y, tileId);
 
-  auto ipuSplatter = createIpuBuilder(pts);
+  auto ipuSplatter = createIpuBuilder(pts, args["no-amp"].as<bool>());
   ipu_utils::GraphManager gm;
   gm.compileOrLoad(*ipuSplatter);
 
