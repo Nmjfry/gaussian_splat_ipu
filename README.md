@@ -103,7 +103,7 @@ Once you are in the container find the ports panel and forward a port number of 
 On the cloud machine in your docker container launch the server:
 
 ```
-./src/main/splat --input ../data/plushy.xyz --ui-port 5000
+./src/main/splat --input ../data/horse_statue_01.xyz --ui-port 5000
 ```
 
 On your local laptop or workstation launch the remote user interface:
