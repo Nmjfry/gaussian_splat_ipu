@@ -5,6 +5,7 @@
 #include <ipu/ipu_utils.hpp>
 
 #include "AsyncTask.hpp"
+#include "VideoClient.hpp"
 
 #include <PacketComms.h>
 #include <PacketSerialisation.h>
@@ -155,8 +156,12 @@ class InterfaceServer {
                                       });
 
       ipu_utils::logger()->info("User interface server entering Tx/Rx loop.");
+
+      // create video client with reciever 
+      cameraReciever.reset(new VideoClient(receiver, "render_preview")); 
       syncWithClient(*sender, receiver, "ready");
       serverReady = true;
+      startCameraDecodeThread();
       while (!stopServer && receiver.ok()) {
         std::this_thread::sleep_for(5ms);
       }
@@ -198,6 +203,50 @@ public:
 
   const State& getState() const {
     return state;
+  }
+
+  void getCameraFrame(cv::Mat& ldrImage) {
+    std::lock_guard<std::mutex> lock(bufferMutex);
+    if (!bgraBuffer.empty()) {
+      std::this_thread::sleep_for(35ms);
+      auto im = cv::Mat(2160,3840,CV_8UC4, bgraBuffer.data(), 15360);
+      if (im.data) {
+        ipu_utils::logger()->info("Loaded image is {}x{}", im.rows, im.cols);
+        cv::cvtColor(im,ldrImage, cv::COLOR_RGB2BGR);
+      }
+    } else {
+      ipu_utils::logger()->error("Decoded image buffer is empty!");
+    }
+  }
+
+  void startCameraDecodeThread () {
+
+
+    cameraThread.reset(new std::thread([&]() {
+          if (cameraReciever->initialiseVideoStream(5s)) {
+
+            int32_t w;
+            int32_t h;
+            for (int i = 0; i < 2; ++i) {
+                cameraReciever->receiveVideoFrame([&w, &h](LibAvCapture &stream) {
+                ipu_utils::logger()->info("Decoding some camera frames to initialise buffer.");
+                w = stream.GetFrameWidth();
+                h = stream.GetFrameHeight();
+              });
+            }
+
+            {
+              std::lock_guard<std::mutex> lock(bufferMutex);
+              bgraBuffer.resize(w * h * 3);
+            }
+
+            while (!stopServer) {
+              std::this_thread::sleep_for(2ms);
+              std::lock_guard<std::mutex> lock(bufferMutex);
+              cameraReciever->decodeVideoFrame(bgraBuffer);
+            }
+          }
+        }));
   }
 
   /// Has the state changed since it was last consumed?:
@@ -346,6 +395,12 @@ private:
   std::unique_ptr<TcpSocket> connection;
   std::unique_ptr<PacketMuxer> sender;
   std::unique_ptr<LibAvWriter> videoStream;
+
+  std::mutex bufferMutex;
+  std::vector<std::uint8_t> bgraBuffer;
+  std::unique_ptr<VideoClient> cameraReciever;
+  std::unique_ptr<std::thread> cameraThread;
+
   State state;
   cv::Mat hdrImage;
   AsyncTask sendHdrTask;

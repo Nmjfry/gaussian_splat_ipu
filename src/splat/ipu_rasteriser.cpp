@@ -28,6 +28,8 @@ IpuSplatter::IpuSplatter(const Points& verts, bool noAMP)
   }
 }
 
+// TODO (nfry): create new constructor that accepts rbga pixels instead of verts
+
 void IpuSplatter::updateModelViewProjection(const glm::mat4& mvp) {
   auto mvpt = glm::transpose(mvp);
   auto ptr = (const float*)glm::value_ptr(mvpt);
