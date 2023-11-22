@@ -2,6 +2,7 @@
 
 #include <splat/ipu_rasteriser.hpp>
 #include <splat/geometry.hpp>
+#include <splat/photometrics.hpp>
 #include <ipu/io_utils.hpp>
 
 #include <glm/gtc/type_ptr.hpp>
@@ -28,7 +29,24 @@ IpuSplatter::IpuSplatter(const Points& verts, bool noAMP)
   }
 }
 
-// TODO (nfry): create new constructor that accepts rbga pixels instead of verts
+// (nfry): create new constructor that accepts rbga pixels instead of verts
+/// Name the streamable tensors and take a reference to the pixel data:
+IpuSplatter::IpuSplatter(const Pixels& pixels, bool noAMP)
+  : modelViewProjection("mvp"), inputVertices("verts_in"), outputVertices("verts_out"),
+    transformMatrix(16),
+    initialised(false),
+    disableAMPVertices(noAMP)
+{
+  // not sure if this reserve: sizeof(Pixel) * pixels.size()
+  hostVertices.reserve(4 * pixels.size());
+  for (const auto& p : pixels) {
+    hostVertices.push_back(p.rgb.x);
+    hostVertices.push_back(p.rgb.y);
+    hostVertices.push_back(p.rgb.z);
+    hostVertices.push_back(1.f);
+  }
+}
+
 
 void IpuSplatter::updateModelViewProjection(const glm::mat4& mvp) {
   auto mvpt = glm::transpose(mvp);
@@ -37,6 +55,18 @@ void IpuSplatter::updateModelViewProjection(const glm::mat4& mvp) {
     transformMatrix[i] = *ptr;
     ptr += 1;
   }
+}
+
+void IpuSplatter::updatePixels(cv::Mat& ldrImage) {
+  // const auto* ptr = hostVertices.data();
+
+  // for (auto i = 0u; i < hostVertices.size(); ++i) {
+
+  // }
+  // for (auto i = 0u; i < transformMatrix.size(); ++i) {
+  //   transformMatrix[i] = *ptr;
+  //   ptr += 1;
+  // }
 }
 
 void IpuSplatter::getProjectedPoints(std::vector<glm::vec4>& pts) const {

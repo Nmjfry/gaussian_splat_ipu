@@ -41,6 +41,30 @@ std::uint32_t splatPoints(cv::Mat& image,
   return count;
 }
 
+std::uint32_t writeTransformedPixels(cv::Mat& image,
+                          const std::vector<glm::vec4>& transformedPixels) {
+  std::uint32_t count = 0u;
+
+  #pragma omp parallel for schedule(static, 128) num_threads(32)
+  for (auto i = 0u; i < transformedPixels.size(); ++i) {
+    glm::vec4 pixel = transformedPixels[i];
+    const auto colour = cv::Vec3b(pixel.x, pixel.y, pixel.z);
+    // Convert from pixel vector to pixel coords:
+    std::uint32_t r = i % image.rows;
+    std::uint32_t c = i / image.cols;
+
+    // Clip points to the image and splat:
+    if (r < image.rows && c < image.cols) {
+      image.at<cv::Vec3b>(r, c) += colour;
+
+      #pragma omp atomic update
+      count += 1;
+    }
+  }
+
+  return count;
+}
+
 void buildTileHistogram(std::vector<std::uint32_t>& counts,
                         const TiledFramebuffer& fb,
                         const std::vector<glm::vec4>& clipCoords,

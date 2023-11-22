@@ -58,6 +58,9 @@ std::uint32_t splatPoints(cv::Mat& image,
                           const splat::Viewport& viewport,
                           std::uint8_t value=25);
 
+std::uint32_t writeTransformedPixels(cv::Mat& image,
+                          const std::vector<glm::vec4>& transformedPixels);
+
 void buildTileHistogram(std::vector<std::uint32_t>& counts,
                         const TiledFramebuffer& fb,
                         const std::vector<glm::vec4>& clipCoords,

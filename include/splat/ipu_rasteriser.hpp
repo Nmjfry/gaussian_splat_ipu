@@ -6,19 +6,25 @@
 
 #include <ipu/ipu_utils.hpp>
 #include <glm/mat4x4.hpp>
+#include <opencv2/imgproc.hpp>
 
 namespace splat {
 
 // Fwd decls:
 class Point3f;
 typedef std::vector<Point3f> Points;
+class Pixel;
+typedef std::vector<Pixel> Pixels;
+
 
 class IpuSplatter : public ipu_utils::BuilderInterface {
 public:
   IpuSplatter(const Points& pts, bool noAMP);
+  IpuSplatter(const Pixels& pxs, bool noAMP);
   virtual ~IpuSplatter() {}
 
   void updateModelViewProjection(const glm::mat4& mvp);
+  void updatePixels(cv::Mat& image);
   void getProjectedPoints(std::vector<glm::vec4>& pts) const;
 
 private:
