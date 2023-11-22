@@ -42,7 +42,7 @@ public:
 
   ~VideoClient() {}
 
-  bool initialiseVideoStream(const std::chrono::seconds &videoTimeout) {
+  bool initialiseVideoStream(int &w, int &h, const std::chrono::seconds &videoTimeout) {
     m_avTimeout = videoTimeout;
     resetAvTimeout();
 
@@ -71,8 +71,8 @@ public:
       return false;
     }
 
-    auto w = getFrameWidth();
-    auto h = getFrameHeight();
+    w = getFrameWidth();
+    h = getFrameHeight();
     ipu_utils::logger()->info("Successfully initialised video stream: {} x {}",
                               w, h);
     return true;

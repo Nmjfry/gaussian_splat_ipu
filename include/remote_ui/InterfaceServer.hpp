@@ -209,7 +209,8 @@ public:
     std::lock_guard<std::mutex> lock(bufferMutex);
     if (!bgraBuffer.empty()) {
       std::this_thread::sleep_for(35ms);
-      auto im = cv::Mat(2160,3840,CV_8UC4, bgraBuffer.data(), 15360);
+      // TODO (nfry): do not hard code stride for image.
+      auto im = cv::Mat(ldrImage.rows,ldrImage.cols,CV_8UC4, bgraBuffer.data(), 15360);
       if (im.data) {
         ipu_utils::logger()->info("Loaded image is {}x{}", im.rows, im.cols);
         cv::cvtColor(im,ldrImage, cv::COLOR_RGB2BGR);
@@ -220,31 +221,21 @@ public:
   }
 
   void startCameraDecodeThread () {
-
-
     cameraThread.reset(new std::thread([&]() {
-          if (cameraReciever->initialiseVideoStream(5s)) {
-
-            int32_t w;
-            int32_t h;
-            for (int i = 0; i < 2; ++i) {
-                cameraReciever->receiveVideoFrame([&w, &h](LibAvCapture &stream) {
-                ipu_utils::logger()->info("Decoding some camera frames to initialise buffer.");
-                w = stream.GetFrameWidth();
-                h = stream.GetFrameHeight();
-              });
-            }
-
+          int32_t w, h;
+          auto ok = cameraReciever->initialiseVideoStream(w, h, 5s);
+          if (ok && w != 0 && h != 0) {
             {
               std::lock_guard<std::mutex> lock(bufferMutex);
               bgraBuffer.resize(w * h * 3);
             }
-
             while (!stopServer) {
               std::this_thread::sleep_for(2ms);
               std::lock_guard<std::mutex> lock(bufferMutex);
               cameraReciever->decodeVideoFrame(bgraBuffer);
             }
+          } else {
+            ipu_utils::logger()->error("Failed to initialise camera stream!");
           }
         }));
   }

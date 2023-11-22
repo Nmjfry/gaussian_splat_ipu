@@ -45,7 +45,7 @@ std::unique_ptr<splat::IpuSplatter> createIpuBuilder(const splat::Points& pts, b
   auto ipuSplatter = std::make_unique<splat::IpuSplatter>(pts, useAMP);
   ipuSplatter->setRuntimeConfig(defaultConfig);
   return ipuSplatter;
-}
+} 
 
 int main(int argc, char** argv) {
   pvti::TraceChannel traceChannel = {"splatter"};
@@ -108,8 +108,8 @@ int main(int argc, char** argv) {
   // TODO (nfry): edit hard coded image dims:
 
   ipu_utils::logger()->info("Number of tiles in framebuffer: {}", fb.numTiles);
-  float x = 719.f;
-  float y = 1279.f;
+  float x = 2159.f;
+  float y = 3839.f;
   auto tileId = fb.pixCoordToTile(x, y);
   ipu_utils::logger()->info("Tile index test. Pix coord {}, {} -> tile id: {}", x, y, tileId);
 
