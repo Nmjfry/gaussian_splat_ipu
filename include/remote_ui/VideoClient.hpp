@@ -115,7 +115,9 @@ public:
         receiveVideoFrame([&bgrBuffer, this](LibAvCapture &stream) {
           ipu_utils::logger()->info("Decoded video frame");
           auto w = stream.GetFrameWidth();
-          stream.ExtractRgbaImage(bgrBuffer.data(), w * 4);
+          if (bgrBuffer.data() != NULL) {
+            stream.ExtractRgbaImage(bgrBuffer.data(), w * 4);
+          }
         });
 
     if (newFrameDecoded) {

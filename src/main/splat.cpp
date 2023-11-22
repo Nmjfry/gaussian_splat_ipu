@@ -106,7 +106,7 @@ int main(int argc, char** argv) {
   splat::Viewport viewport(0.f, 0.f, imagePtr->cols, imagePtr->rows);
 
   // Construct some tiled framebuffer histograms:
-  splat::TiledFramebuffer fb(imagePtr->cols, imagePtr->rows, 40, 16);
+  splat::TiledFramebuffer fb(imagePtr->cols, imagePtr->rows, 90, 64);
   auto pointCounts = std::vector<std::uint32_t>(fb.numTiles, 0u);
 
 
@@ -121,6 +121,7 @@ int main(int argc, char** argv) {
   // TODO (nfry): Instead of building with pts, use pixels from image rgba:
   // will need to modify codelets otherwise some wierd things will happen to the pixels. 
   auto pxs = gatherPixels(*imagePtr);
+  ipu_utils::logger()->info("Number of pixels in the image: {}", pxs.size());
   auto ipuSplatter = createIpuBuilder(pxs, args["no-amp"].as<bool>());
   ipu_utils::GraphManager gm;
   gm.compileOrLoad(*ipuSplatter);
@@ -159,6 +160,7 @@ int main(int argc, char** argv) {
   do {
     auto startTime = std::chrono::steady_clock::now();
     *imagePtr = 0;
+    uiServer->getCameraFrame(*imagePtr);
 
     if (state.device == "cpu") {
       // pvti::Tracepoint scoped(&traceChannel, "mvp_transform_cpu");
@@ -168,7 +170,6 @@ int main(int argc, char** argv) {
 
       // TODO (nfry): instead of changing projection, decode a new frame and
       // write the pixel values to the frame buffer
-      uiServer->getCameraFrame(*imagePtr);
       // ipuSplatter->updatePixels(*imagePtr);
 
       gm.execute(*ipuSplatter);

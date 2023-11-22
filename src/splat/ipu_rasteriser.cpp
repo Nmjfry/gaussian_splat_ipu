@@ -120,8 +120,10 @@ void applyTileMapping(poplar::Graph& g, const poplar::Tensor& paddedInput, const
 
   // Last tile has fewer elements:
   auto lastSlice = paddedInput.slice(sliceStart, paddedInput.numElements());
-  ipu_utils::logger()->info("Size of slice on last tile: {}", lastSlice.numElements());
-  g.setTileMapping(lastSlice, t);
+  if (lastSlice.numElements() > 0) {
+    ipu_utils::logger()->info("Size of slice on last tile: {}", lastSlice.numElements());
+    g.setTileMapping(lastSlice, t);
+  }
 }
 
 // Add a vertex to project vertices that uses vanilla C++ code.
