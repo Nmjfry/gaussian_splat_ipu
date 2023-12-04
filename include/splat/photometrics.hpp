@@ -8,12 +8,7 @@
 
 namespace splat {
 
-struct Pixel {
-  glm::vec3 rgb;
-};
-
+typedef glm::vec4 Pixel;
 typedef std::vector<Pixel> Pixels;
-
-
 
 } // end of namespace splat

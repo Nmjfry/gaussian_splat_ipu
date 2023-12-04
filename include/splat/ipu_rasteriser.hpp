@@ -13,7 +13,7 @@ namespace splat {
 // Fwd decls:
 class Point3f;
 typedef std::vector<Point3f> Points;
-class Pixel;
+typedef glm::vec4 Pixel;
 typedef std::vector<Pixel> Pixels;
 
 
@@ -24,8 +24,9 @@ public:
   virtual ~IpuSplatter() {}
 
   void updateModelViewProjection(const glm::mat4& mvp);
-  void updatePixels(cv::Mat& image);
+  void updateFrameBuffer(cv::Mat& frame);
   void getProjectedPoints(std::vector<glm::vec4>& pts) const;
+  void getTransformedFrame(cv::Mat& frame) const;
 
 private:
   void build(poplar::Graph& graph, const poplar::Target& target) override;

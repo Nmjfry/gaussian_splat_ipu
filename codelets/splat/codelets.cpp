@@ -35,7 +35,11 @@ public:
     const auto startIndex = 4 * workerId;
     for (auto i = startIndex; i < vertsIn.size(); i += 4 * numWorkers()) {
       auto v = glm::make_vec4(&vertsIn[i]);
-      v = m * v;
+      auto grey = (v.r + v.g + v.b) / 3;
+      v.r = grey; 
+      v.g = grey; 
+      v.b = grey; 
+      // v = m * v;
       memcpy(&vertsOut[i], glm::value_ptr(v), sizeof(v));
     }
     return true;

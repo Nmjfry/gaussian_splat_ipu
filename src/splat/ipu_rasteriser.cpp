@@ -40,9 +40,9 @@ IpuSplatter::IpuSplatter(const Pixels& pixels, bool noAMP)
   // not sure if this reserve: sizeof(Pixel) * pixels.size()
   hostVertices.reserve(4 * pixels.size());
   for (const auto& p : pixels) {
-    hostVertices.push_back(p.rgb.x);
-    hostVertices.push_back(p.rgb.y);
-    hostVertices.push_back(p.rgb.z);
+    hostVertices.push_back(p.r);
+    hostVertices.push_back(p.g);
+    hostVertices.push_back(p.b);
     hostVertices.push_back(1.f);
   }
 }
@@ -57,17 +57,24 @@ void IpuSplatter::updateModelViewProjection(const glm::mat4& mvp) {
   }
 }
 
-void IpuSplatter::updatePixels(cv::Mat& ldrImage) {
-  // const auto* ptr = hostVertices.data();
+void IpuSplatter::updateFrameBuffer(cv::Mat& frame) {
+  
+  auto* buffer = frame.data;
+  auto* ptr = hostVertices.data();
+  #pragma omp parallel for schedule(static, 128) num_threads(24)
+  for (auto i = 0u; i < hostVertices.size(); i += 4) {
 
-  // for (auto i = 0u; i < hostVertices.size(); ++i) {
-
-  // }
-  // for (auto i = 0u; i < transformMatrix.size(); ++i) {
-  //   transformMatrix[i] = *ptr;
-  //   ptr += 1;
-  // }
+    *(ptr + 0) = *(buffer + 0); // B 0x11100111 = 231 (char) / 255 = 0.90588 (float)
+    *(ptr + 1) = *(buffer + 1); // G
+    *(ptr + 2) = *(buffer + 2); // R
+    *(ptr + 3) = 1.0; // a
+    
+    ptr += 4;
+    buffer += 3;
+  }
 }
+
+
 
 void IpuSplatter::getProjectedPoints(std::vector<glm::vec4>& pts) const {
   pts.resize(hostVertices.size() / 4);
@@ -79,6 +86,35 @@ void IpuSplatter::getProjectedPoints(std::vector<glm::vec4>& pts) const {
     pts[i].w = *(ptr + 3);
     ptr += 4;
   }
+}
+
+
+
+void IpuSplatter::getTransformedFrame(cv::Mat& frame) const {
+
+  const auto* ptr = hostVertices.data();
+  #pragma omp parallel for schedule(static, 128) num_threads(24)
+  for (auto i = 0u; i < hostVertices.size(); ++i, ptr += 4) {
+    glm::vec4 pixel; 
+
+    pixel.b = *(ptr + 0);
+    pixel.g = *(ptr + 1);
+    pixel.r = *(ptr + 2);
+    pixel.a = 1.0;
+
+    const auto colour = cv::Vec3b((uint8_t) pixel.b, (uint8_t) pixel.g, (uint8_t) pixel.r);
+    // Convert from pixel vector to pixel coords:
+    std::uint32_t r = i / frame.cols;
+    std::uint32_t c = i - r * frame.cols;
+
+    // Clip points to the frame and splat:
+    if (r < frame.rows && c < frame.cols) {
+      frame.at<cv::Vec3b>(r, c) = colour;
+
+      // #pragma omp atomic update
+    }
+  }
+
 }
 
 struct MappingInfo {
@@ -198,8 +234,8 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   const auto csName = disableAMPVertices ? "project" : "project_amp";
   auto projectCs = vg.addComputeSet(csName);
 
-  // Get the tile mapping and connect the vertices:
   const auto tm = vg.getTileMapping(paddedInput);
+
   for (auto t = 0u; t < tm.size(); ++t) {
     const auto& m = tm[t];
     if (m.size() > 1u) {
@@ -224,11 +260,13 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   }
 
   program::Sequence main;
+  main.add(inputVertices.buildWrite(vg, true));
   main.add(broadcastMvp);
   main.add(program::Execute(projectCs));
   main.add(outputVertices.buildRead(vg, true));
+  // main.add(inputVertices.)
 
-  getPrograms().add("write_verts", inputVertices.buildWrite(vg, true));
+  // getPrograms().add("write_verts", inputVertices.buildWrite(vg, true));
   getPrograms().add("project", main);
 }
 
@@ -238,9 +276,10 @@ void IpuSplatter::execute(poplar::Engine& engine, const poplar::Device& device) 
     modelViewProjection.connectWriteStream(engine, transformMatrix);
     inputVertices.connectWriteStream(engine, hostVertices);
     outputVertices.connectReadStream(engine, hostVertices);
-    getPrograms().run(engine, "write_verts");
+    // getPrograms().run(engine, "write_verts");
   }
 
+  // getPrograms().run(engine, "write_verts");
   getPrograms().run(engine, "project");
 }
 

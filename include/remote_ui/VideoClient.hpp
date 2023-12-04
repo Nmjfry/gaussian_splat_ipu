@@ -34,9 +34,9 @@ public:
               m_avDataPackets.emplace(packet);
               m_totalVideoBytes += packet->getDataSize();
 
-              ipu_utils::logger()->info(
-                  "Received compressed video packet of size {}",
-                  packet->getDataSize());
+              // ipu_utils::logger()->info(
+                  // "Received compressed video packet of size {}",
+                  // packet->getDataSize());
             })),
         m_avTimeout(0) {}
 
@@ -110,18 +110,20 @@ public:
     return bits_per_sec;
   }
 
-  void decodeVideoFrame(std::vector<std::uint8_t> &bgrBuffer) {
+  void decodeVideoFrame(std::vector<std::uint8_t> &bgraBuffer) {
     newFrameDecoded =
-        receiveVideoFrame([&bgrBuffer, this](LibAvCapture &stream) {
-          ipu_utils::logger()->info("Decoded video frame");
+        receiveVideoFrame([&bgraBuffer](LibAvCapture &stream) {
+          // ipu_utils::logger()->info("Decoded video frame");
           auto w = stream.GetFrameWidth();
-          if (bgrBuffer.data() != NULL) {
-            stream.ExtractRgbaImage(bgrBuffer.data(), w * 4);
+          auto h = stream.GetFrameHeight();
+          if (bgraBuffer.data() != NULL && bgraBuffer.size() >= h * w) {
+            // segfaults sometimes 
+            stream.ExtractRgbaImage(bgraBuffer.data(), w * 4);
           }
         });
 
     if (newFrameDecoded) {
-      ipu_utils::logger()->info("Successfully decoded video frame");
+      // ipu_utils::logger()->info("Successfully decoded video frame");
     } else {
       ipu_utils::logger()->info("Failed to decode video frame, buffer is null.");
     }

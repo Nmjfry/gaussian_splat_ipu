@@ -65,18 +65,28 @@ std::unique_ptr<splat::IpuSplatter> createIpuBuilder(const splat::Pixels& pxs, b
   return ipuSplatter;
 } 
 
-splat::Pixels gatherPixels(cv::Mat &image) {
-  splat::Pixels pxs;
+void gatherPixels(splat::Pixels &pxs, cv::Mat &image) {
+ 
   pxs.reserve(image.cols * image.rows * 4);
 
   for (int row = 0; row < image.rows; row++) {
+    auto rowPtr = image.ptr(row);
     for (int col = 0; col < image.cols; col++) {
-        splat::Pixel pix = image.at<splat::Pixel>(col, row);
-        pxs.push_back(pix);
+        // throws away alpha value?
+        splat::Pixel rgba;
+        
+        rgba.b = rowPtr[col*4+0];
+        rgba.g = rowPtr[col*4+1];
+        rgba.r = rowPtr[col*4+2];
+        rgba.a = rowPtr[col*4+3];
+        
+        if (row % 1000 == 0 && col % 1000 == 0) {
+          ipu_utils::logger()->info("pix at: ({},{}), colour {},{},{}", col, row, rgba.r, rgba.g, rgba.b);
+        }
+        pxs.push_back(rgba);
     }
   }
 
-  return pxs;
 }
 
 int main(int argc, char** argv) {
@@ -98,12 +108,42 @@ int main(int argc, char** argv) {
   // ###############################################################
   // ###############################################################
 
+
+  auto xyzFile = args["input"].as<std::string>();
+  auto pts = splat::loadXyz(std::ifstream(xyzFile));
+  splat::Bounds3f bb(pts);
+  ipu_utils::logger()->info("Total point count: {}", pts.size());
+  ipu_utils::logger()->info("Point bounds (world space): {}", bb);
+
+  // Translate all points so the centroid is zero then negate the z-axis:
+  {
+    const auto bbCentre = bb.centroid();
+    for (auto& v : pts) {
+      v.p -= bbCentre;
+      v.p.z = -v.p.z;
+    }
+    bb = splat::Bounds3f(pts);
+  }
+
+
+  // ###############################################################
+  // ###############################################################
+  // ###############################################################
+
   // TODO (nfry): get image buffer, create openCV image to process:
 
   // create an OpenCV image to contain pixels from camera:
-  auto imagePtr = std::make_unique<cv::Mat>(2160,3840,CV_8UC3,15360);
-  auto imagePtrBuffered = std::make_unique<cv::Mat>(imagePtr->rows, imagePtr->cols, CV_8UC3,15360);
+  auto imagePtr = std::make_unique<cv::Mat>(2160, 3840, CV_8UC4,15360);
+  // *imagePtr = cv::Scalar(32,147,255);
+  size_t sizeInBytes = (*imagePtr).total() * (*imagePtr).elemSize();
+
+  auto pix = imagePtr->at<glm::vec4>(10, 10);
+  ipu_utils::logger()->info("Sample pixels in the image ({} bytes): {}, {}, {}, {}", sizeInBytes, pix.r, pix.g, pix.b, pix.a);
+
+  auto imagePtrBuffered = std::make_unique<cv::Mat>(imagePtr->rows, imagePtr->cols, CV_8UC4,15360);
   splat::Viewport viewport(0.f, 0.f, imagePtr->cols, imagePtr->rows);
+  const float aspect = imagePtr->cols / (float)imagePtr->rows;
+
 
   // Construct some tiled framebuffer histograms:
   splat::TiledFramebuffer fb(imagePtr->cols, imagePtr->rows, 90, 64);
@@ -120,8 +160,13 @@ int main(int argc, char** argv) {
 
   // TODO (nfry): Instead of building with pts, use pixels from image rgba:
   // will need to modify codelets otherwise some wierd things will happen to the pixels. 
-  auto pxs = gatherPixels(*imagePtr);
+  splat::Pixels pxs;
+  gatherPixels(pxs, *imagePtr);
   ipu_utils::logger()->info("Number of pixels in the image: {}", pxs.size());
+  ipu_utils::logger()->info("Sample pixels in the image: {}, {}", pxs[0].g, pxs[10].a);
+  
+
+
   auto ipuSplatter = createIpuBuilder(pxs, args["no-amp"].as<bool>());
   ipu_utils::GraphManager gm;
   gm.compileOrLoad(*ipuSplatter);
@@ -136,7 +181,32 @@ int main(int argc, char** argv) {
     uiServer.reset(new InterfaceServer(uiPort));
     uiServer->start();
     uiServer->initialiseVideoStream(imagePtr->cols, imagePtr->rows);
+    uiServer->updateFov(state.fov);
   }
+
+  // ###############################################################
+  // ###############################################################
+  // ###############################################################
+
+    // Set up the modelling and projection transforms in an OpenGL compatible way:
+  auto modelView = splat::lookAtBoundingBox(bb, glm::vec3(0.f , 1.f, 0.f), 1.f);
+
+  // Transform the BB to camera/eye space:
+  splat::Bounds3f bbInCamera(
+    modelView * glm::vec4(bb.min, 1.f),
+    modelView * glm::vec4(bb.max, 1.f)
+  );
+
+  ipu_utils::logger()->info("Point bounds (eye space): {}", bbInCamera);
+  auto projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
+
+  ipuSplatter->updateModelViewProjection(modelView * projection);
+
+
+  // ###############################################################
+  // ###############################################################
+  // ###############################################################
+
 
   gm.prepareEngine();
 
@@ -157,6 +227,7 @@ int main(int argc, char** argv) {
     }
   };
 
+  auto dynamicView = modelView;
   do {
     auto startTime = std::chrono::steady_clock::now();
     *imagePtr = 0;
@@ -168,21 +239,28 @@ int main(int argc, char** argv) {
     } else if (state.device == "ipu") {
       pvti::Tracepoint scoped(&traceChannel, "mvp_transform_ipu");
 
-      // TODO (nfry): instead of changing projection, decode a new frame and
-      // write the pixel values to the frame buffer
-      // ipuSplatter->updatePixels(*imagePtr);
+      // 1. update proj matrix
+      // 2. write frame to hostVertices (frameBuffer on IPU)
+      // 3. connect read stream on IPU (re-read hostVerts / write them to tiles)
+      // 4. transform verts 
+      // 5. 
+      ipuSplatter->updateModelViewProjection(projection * dynamicView);
+      ipuSplatter->updateFrameBuffer(*imagePtr);
+
 
       gm.execute(*ipuSplatter);
 
       // TODO (nfry): instead of loading projected points into clipSpace,
       // load transformed pixels. 
-      ipuSplatter->getProjectedPoints(transformedPixels);
+      // ipuSplatter->getProjectedPoints(transformedPixels);
+      ipuSplatter->getTransformedFrame(*imagePtr);
     }
 
     unsigned count = 0u;
-    {
-      count = splat::writeTransformedPixels(*imagePtr, transformedPixels);
-    }
+    // {
+    //   pvti::Tracepoint scope(&traceChannel, "splatting_cpu");
+    //   count = splat::writeTransformedPixels(*imagePtr, transformedPixels);
+    // }
 
     auto endTime = std::chrono::steady_clock::now();
     auto splatTimeSecs = std::chrono::duration<double>(endTime - startTime).count();
@@ -190,10 +268,14 @@ int main(int argc, char** argv) {
     if (uiServer) {
 
       hostProcessing.waitForCompletion();
+
       std::swap(imagePtr, imagePtrBuffered);
       
       hostProcessing.run(uiUpdateFunc);
       state = uiServer->consumeState();
+      projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
+      // Update modelview:
+      dynamicView = modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(0.f, 1.f, 0.f));
 
     } else {
       // Only log these if not in interactive mode:
