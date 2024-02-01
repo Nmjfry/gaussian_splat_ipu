@@ -154,12 +154,14 @@ int main(int argc, char** argv) {
       pvti::Tracepoint scoped(&traceChannel, "mvp_transform_ipu");
       ipuSplatter->updateModelViewProjection(projection * dynamicView);
       gm.execute(*ipuSplatter);
+      //copies projected to points to host
       ipuSplatter->getProjectedPoints(clipSpace);
     }
 
     unsigned count = 0u;
     {
       pvti::Tracepoint scope(&traceChannel, "splatting_cpu");
+      //rasterises on CPU 
       count = splatPoints(*imagePtr, clipSpace, viewport);
     }
 

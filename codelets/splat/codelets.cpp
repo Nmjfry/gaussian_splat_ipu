@@ -13,6 +13,12 @@
 #include <ipu_builtins.h>
 #endif
 
+struct square {
+  glm::vec4 centre;
+  glm::vec2 topleft;
+  glm::vec2 bottomright;
+};
+
 // Multi-Vertex to transform every 4x1 vector
 // in an array by the same 4x4 transformation matrix.
 // Uses the OpenGL Math (GLM) library for demonstration
@@ -26,11 +32,20 @@ class Transform4x4 : public poplar::MultiVertex {
 public:
   poplar::Input<poplar::Vector<float>> matrix;
   poplar::Input<poplar::Vector<float>> vertsIn;
+  // instead of vertsOut we can have a vector of pixels 
+  // corresponding to a pinned section of the framebuffer.
+
+  // we need to configure the shape of this vector so that 
+  // it can be a particular segment of the image. This can be done
+  // in the array copy pattern to and from host
   poplar::Output<poplar::Vector<float>> vertsOut;
 
   bool compute(unsigned workerId) {
     // Transpose because GLM storage order is column major:
     const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
+
+    struct square g1;
+    g1.centre = glm::make_vec4(&vertsIn[0]);
 
     const auto startIndex = 4 * workerId;
     for (auto i = startIndex; i < vertsIn.size(); i += 4 * numWorkers()) {
@@ -41,6 +56,22 @@ public:
     return true;
   }
 };
+
+
+/*
+
+Tile Rasteriser for one gaussian:
+
+1. use a point in vertsIn as the center of a gaussian
+2. create a lightweight gaussian class within SRAM of tile
+
+3. use compute vertex to iterate over pixels in the out buffer:
+      if pixel is within bounds of covariance matrix: 
+          colour with gaussian 
+      else:
+          leave black
+
+*/
 
 #define CCCSLOAD 80
 

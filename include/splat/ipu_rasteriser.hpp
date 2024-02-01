@@ -29,6 +29,7 @@ private:
   ipu_utils::StreamableTensor inputVertices;
   ipu_utils::StreamableTensor outputVertices;
   std::vector<float> transformMatrix;
+  //TODO: make a seperate vector for out pixels
   std::vector<float> hostVertices;
   std::atomic<bool> initialised;
   const bool disableAMPVertices;
