@@ -44,13 +44,30 @@ public:
     // Transpose because GLM storage order is column major:
     const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
 
-    struct square g1;
-    g1.centre = glm::make_vec4(&vertsIn[0]);
-
     const auto startIndex = 4 * workerId;
     for (auto i = startIndex; i < vertsIn.size(); i += 4 * numWorkers()) {
       auto v = glm::make_vec4(&vertsIn[i]);
+      // move the centre of the square to a new position
       v = m * v;
+      // init the square
+      struct square g1;
+      g1.centre = glm::make_vec4(&vertsIn[0]);
+      // TODO: find some way to get the topleft and bottomright of the square
+      // in screenspace coordinates.
+      // g1.topleft = glm::make_vec2(&vertsIn[1]);
+      // g1.bottomright = glm::make_vec2(&vertsIn[2]);
+      
+      // rasterise the square
+
+      // for (int i = g1.topleft.x; i < g1.bottomright.x; i++) {
+      //  for (int j = g1.topleft.y; j < g1.bottomright.y; j++) {
+      //    // if the pixel is within the square
+      //    if (i > (IMWIDTH / tileID) && i < (IMWIDTH / tileID) && j > (IMHEIGHT / tileID) && j < (IMHEIGHT / tileID)) {
+      //      // colour the pixel
+      //      vertsOut[ID IN TILE] = 1.0;
+      //    }
+
+
       memcpy(&vertsOut[i], glm::value_ptr(v), sizeof(v));
     }
     return true;

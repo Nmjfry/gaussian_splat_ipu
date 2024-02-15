@@ -83,11 +83,17 @@ int main(int argc, char** argv) {
   splat::Viewport viewport(0.f, 0.f, imagePtr->cols, imagePtr->rows);
   const float aspect = imagePtr->cols / (float)imagePtr->rows;
 
+
   // Construct some tiled framebuffer histograms:
-  splat::TiledFramebuffer fb(imagePtr->cols, imagePtr->rows, 40, 16);
+  splat::TiledFramebuffer fb(imagePtr->cols, imagePtr->rows, 32, 20);
   auto pointCounts = std::vector<std::uint32_t>(fb.numTiles, 0u);
 
+  auto num_pixels = imagePtr->rows * imagePtr->cols;
+  auto pixels_per_tile = num_pixels / fb.numTiles;
+  ipu_utils::logger()->info("Number of pixels in framebuffer: {}", num_pixels);
   ipu_utils::logger()->info("Number of tiles in framebuffer: {}", fb.numTiles);
+  ipu_utils::logger()->info("Number of pixels per tile: {}", pixels_per_tile);
+
   float x = 719.f;
   float y = 1279.f;
   auto tileId = fb.pixCoordToTile(x, y);
@@ -155,6 +161,7 @@ int main(int argc, char** argv) {
       ipuSplatter->updateModelViewProjection(projection * dynamicView);
       gm.execute(*ipuSplatter);
       //copies projected to points to host
+      // ipuSplatter->getFramebuffer(*imagePtr);
       ipuSplatter->getProjectedPoints(clipSpace);
     }
 
@@ -183,6 +190,7 @@ int main(int argc, char** argv) {
       ipu_utils::logger()->info("Splat time: {} points/sec: {}", splatTimeSecs, pts.size()/splatTimeSecs);
       ipu_utils::logger()->info("Splatted point count: {}", count);
     }
+
   } while (uiServer && state.stop == false);
 
   hostProcessing.waitForCompletion();

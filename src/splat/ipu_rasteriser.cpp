@@ -37,6 +37,41 @@ void IpuSplatter::updateModelViewProjection(const glm::mat4& mvp) {
   }
 }
 
+
+// void IpuSplatter::getFramebuffer(cv::Mat& frame) const {
+// need to ensure that we read sections of the framebuffer 
+// as square tiles and then stitch them together
+
+//  unsigned imWidth = frame.cols;
+//  unsigned imHeight = frame.rows;
+
+// 
+
+//   const auto* ptr = frameBuffer.data();
+//   #pragma omp parallel for schedule(static, 128) num_threads(24)
+//   for (auto i = 0u; i < frameBuffer.size(); ++i, ptr += 4) {
+//     glm::vec4 pixel; 
+
+//     pixel.b = *(ptr + 0);
+//     pixel.g = *(ptr + 1);
+//     pixel.r = *(ptr + 2);
+//     pixel.a = 1.0;
+
+//     const auto colour = cv::Vec3b((uint8_t) pixel.b, (uint8_t) pixel.g, (uint8_t) pixel.r);
+//     // Convert from pixel vector to pixel coords:
+//     std::uint32_t r = i / frame.cols;
+//     std::uint32_t c = i - r * frame.cols;
+
+//     // Clip points to the frame and splat:
+//     if (r < frame.rows && c < frame.cols) {
+//       frame.at<cv::Vec3b>(r, c) = colour;
+
+//       // #pragma omp atomic update
+//     }
+//   }
+
+// }
+
 void IpuSplatter::getProjectedPoints(std::vector<glm::vec4>& pts) const {
   pts.resize(hostVertices.size() / 4);
   const auto* ptr = hostVertices.data();
@@ -203,6 +238,7 @@ void IpuSplatter::execute(poplar::Engine& engine, const poplar::Device& device) 
     initialised = true;
     modelViewProjection.connectWriteStream(engine, transformMatrix);
     inputVertices.connectWriteStream(engine, hostVertices);
+    // outputVertices.connectReadStream(engine, frameBuffer);
     outputVertices.connectReadStream(engine, hostVertices);
     getPrograms().run(engine, "write_verts");
   }
