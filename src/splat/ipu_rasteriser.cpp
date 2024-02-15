@@ -13,22 +13,7 @@ using namespace poplar;
 namespace splat {
 
 /// Name the streamable tensors and take a reference to the point data:
-IpuSplatter::IpuSplatter(const Points& verts, bool noAMP)
-  : modelViewProjection("mvp"), inputVertices("verts_in"), outputVertices("verts_out"),
-    transformMatrix(16),
-    initialised(false),
-    disableAMPVertices(noAMP)
-{
-  hostVertices.reserve(4 * verts.size());
-  for (const auto& v : verts) {
-    hostVertices.push_back(v.p.x);
-    hostVertices.push_back(v.p.y);
-    hostVertices.push_back(v.p.z);
-    hostVertices.push_back(1.f);
-  }
-}
-
-// IpuSplatter::IpuSplatter(const Points& verts, splat::TiledFramebuffer& fb, bool noAMP)
+// IpuSplatter::IpuSplatter(const Points& verts, bool noAMP)
 //   : modelViewProjection("mvp"), inputVertices("verts_in"), outputVertices("verts_out"),
 //     transformMatrix(16),
 //     initialised(false),
@@ -41,8 +26,24 @@ IpuSplatter::IpuSplatter(const Points& verts, bool noAMP)
 //     hostVertices.push_back(v.p.z);
 //     hostVertices.push_back(1.f);
 //   }
-//   frameBuffer.resize(fb.width * fb.height * 4, 0.0f);
 // }
+
+IpuSplatter::IpuSplatter(const Points& verts, splat::TiledFramebuffer& fb, bool noAMP)
+  : modelViewProjection("mvp"), inputVertices("verts_in"), outputVertices("verts_out"),
+    transformMatrix(16),
+    initialised(false),
+    disableAMPVertices(noAMP),
+    fbMapping(fb)
+{
+  hostVertices.reserve(4 * verts.size());
+  for (const auto& v : verts) {
+    hostVertices.push_back(v.p.x);
+    hostVertices.push_back(v.p.y);
+    hostVertices.push_back(v.p.z);
+    hostVertices.push_back(1.f);
+  }
+  frameBuffer.resize(fb.width * fb.height * 4, 0.0f);
+}
 
 void IpuSplatter::updateModelViewProjection(const glm::mat4& mvp) {
   auto mvpt = glm::transpose(mvp);
@@ -53,40 +54,14 @@ void IpuSplatter::updateModelViewProjection(const glm::mat4& mvp) {
   }
 }
 
+void IpuSplatter::getFrameBuffer(cv::Mat &frame) const {
+  // need to ensure that we read sections of the framebuffer
+  // as square tiles and then stitch them together
 
-// void IpuSplatter::getFramebuffer(cv::Mat& frame) const {
-// need to ensure that we read sections of the framebuffer 
-// as square tiles and then stitch them together
+  // for now, just copy the framebuffer to the output
+  frame = cv::Mat(cv::Size(fbMapping.width, fbMapping.height), CV_8UC4, (void *) frameBuffer.data(), cv::Mat::AUTO_STEP);
 
-//  unsigned imWidth = frame.cols;
-//  unsigned imHeight = frame.rows;
-
-// 
-
-//   const auto* ptr = frameBuffer.data();
-//   #pragma omp parallel for schedule(static, 128) num_threads(24)
-//   for (auto i = 0u; i < frameBuffer.size(); ++i, ptr += 4) {
-//     glm::vec4 pixel; 
-
-//     pixel.b = *(ptr + 0);
-//     pixel.g = *(ptr + 1);
-//     pixel.r = *(ptr + 2);
-//     pixel.a = 1.0;
-
-//     const auto colour = cv::Vec3b((uint8_t) pixel.b, (uint8_t) pixel.g, (uint8_t) pixel.r);
-//     // Convert from pixel vector to pixel coords:
-//     std::uint32_t r = i / frame.cols;
-//     std::uint32_t c = i - r * frame.cols;
-
-//     // Clip points to the frame and splat:
-//     if (r < frame.rows && c < frame.cols) {
-//       frame.at<cv::Vec3b>(r, c) = colour;
-
-//       // #pragma omp atomic update
-//     }
-//   }
-
-// }
+}
 
 void IpuSplatter::getProjectedPoints(std::vector<glm::vec4>& pts) const {
   pts.resize(hostVertices.size() / 4);
@@ -235,7 +210,6 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   // #####################
 
   for (auto t = 0u; t < tm.size(); ++t) {
-    ipu_utils::logger()->info("TILE : {} / {}", t, tm.size());
     const auto& m = tm[t];
     // const auto& mFb = tmFb[t];
     if (m.size() > 1u) {

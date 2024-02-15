@@ -6,6 +6,7 @@
 
 #include <ipu/ipu_utils.hpp>
 #include <glm/mat4x4.hpp>
+#include "cpu_rasteriser.hpp"
 
 namespace splat {
 
@@ -15,11 +16,12 @@ typedef std::vector<Point3f> Points;
 
 class IpuSplatter : public ipu_utils::BuilderInterface {
 public:
-  IpuSplatter(const Points& pts, bool noAMP);
+  IpuSplatter(const Points& pts, splat::TiledFramebuffer& fb, bool noAMP);
   virtual ~IpuSplatter() {}
 
   void updateModelViewProjection(const glm::mat4& mvp);
   void getProjectedPoints(std::vector<glm::vec4>& pts) const;
+  void getFrameBuffer(cv::Mat &frame) const;
 
 private:
   void build(poplar::Graph& graph, const poplar::Target& target) override;
@@ -30,8 +32,8 @@ private:
   ipu_utils::StreamableTensor outputVertices;
   std::vector<float> transformMatrix;
   std::vector<float> hostVertices;
-  //TODO: make a seperate vector for out pixels
-  // std::vector<float> frameBuffer;
+  TiledFramebuffer fbMapping;
+  std::vector<uchar> frameBuffer;
   std::atomic<bool> initialised;
   const bool disableAMPVertices;
 };

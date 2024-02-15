@@ -32,7 +32,7 @@ void addOptions(boost::program_options::options_description& desc) {
    "Disable use of optimised AMP codelets.");
 }
 
-std::unique_ptr<splat::IpuSplatter> createIpuBuilder(const splat::Points& pts, bool useAMP) {
+std::unique_ptr<splat::IpuSplatter> createIpuBuilder(const splat::Points& pts, splat::TiledFramebuffer& fb, bool useAMP) {
   using namespace poplar;
 
   ipu_utils::RuntimeConfig defaultConfig {
@@ -42,7 +42,7 @@ std::unique_ptr<splat::IpuSplatter> createIpuBuilder(const splat::Points& pts, b
     false, true // compileOnly, deferredAttach
   };
 
-  auto ipuSplatter = std::make_unique<splat::IpuSplatter>(pts, useAMP);
+  auto ipuSplatter = std::make_unique<splat::IpuSplatter>(pts, fb, useAMP);
   ipuSplatter->setRuntimeConfig(defaultConfig);
   return ipuSplatter;
 }
@@ -99,7 +99,7 @@ int main(int argc, char** argv) {
   auto tileId = fb.pixCoordToTile(x, y);
   ipu_utils::logger()->info("Tile index test. Pix coord {}, {} -> tile id: {}", x, y, tileId);
 
-  auto ipuSplatter = createIpuBuilder(pts, args["no-amp"].as<bool>());
+  auto ipuSplatter = createIpuBuilder(pts, fb, args["no-amp"].as<bool>());
   ipu_utils::GraphManager gm;
   gm.compileOrLoad(*ipuSplatter);
 
@@ -131,10 +131,6 @@ int main(int argc, char** argv) {
   ipuSplatter->updateModelViewProjection(modelView * projection);
   gm.prepareEngine();
 
-  // dont need to allocate memory for clipSpace as proj is done in the IPU
-  std::vector<glm::vec4> clipSpace;
-  clipSpace.reserve(pts.size());
-
   // Video is encoded and sent in a separate thread:
   AsyncTask hostProcessing;
   auto uiUpdateFunc = [&]() {
@@ -142,10 +138,6 @@ int main(int argc, char** argv) {
       pvti::Tracepoint scoped(&traceChannel, "ui_update");
       uiServer->sendHistogram(pointCounts);
       uiServer->sendPreviewImage(*imagePtrBuffered);
-    }
-    {
-      pvti::Tracepoint scope(&traceChannel, "build_histogram");
-      buildTileHistogram(pointCounts, fb, clipSpace, viewport);
     }
   };
 
@@ -155,22 +147,15 @@ int main(int argc, char** argv) {
     *imagePtr = 0;
 
     if (state.device == "cpu") {
-      pvti::Tracepoint scoped(&traceChannel, "mvp_transform_cpu");
-      projectPoints(pts, projection, dynamicView, clipSpace);
+      // pvti::Tracepoint scoped(&traceChannel, "mvp_transform_cpu");
+      // projectPoints(pts, projection, dynamicView, clipSpace);
     } else if (state.device == "ipu") {
       pvti::Tracepoint scoped(&traceChannel, "mvp_transform_ipu");
       ipuSplatter->updateModelViewProjection(projection * dynamicView);
       gm.execute(*ipuSplatter);
-      //copies projected to points to host
-      // ipuSplatter->getFramebuffer(*imagePtr);
-      ipuSplatter->getProjectedPoints(clipSpace);
-    }
-
-    unsigned count = 0u;
-    {
-      pvti::Tracepoint scope(&traceChannel, "splatting_cpu");
-      //rasterises on CPU 
-      count = splatPoints(*imagePtr, clipSpace, viewport);
+      // TODO: add a variable for splatted points count
+      // from IPU to the host
+      ipuSplatter->splat::IpuSplatter::getFrameBuffer(*imagePtr);
     }
 
     auto endTime = std::chrono::steady_clock::now();
@@ -189,7 +174,7 @@ int main(int argc, char** argv) {
     } else {
       // Only log these if not in interactive mode:
       ipu_utils::logger()->info("Splat time: {} points/sec: {}", splatTimeSecs, pts.size()/splatTimeSecs);
-      ipu_utils::logger()->info("Splatted point count: {}", count);
+      // ipu_utils::logger()->info("Splatted point count: {}", count);
     }
 
   } while (uiServer && state.stop == false);
