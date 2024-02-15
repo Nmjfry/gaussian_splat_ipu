@@ -191,9 +191,21 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   ipu_utils::logger()->info("Size input: {}", inputVertices.numElements());
   ipu_utils::logger()->info("Size of padded input: {}", paddedInput.numElements());
 
+
+  // ###### TEMPORARY ######
   // Clone the input to make the output:
   auto paddedOutput = vg.clone(paddedInput, "verts_out");
   outputVertices = paddedOutput.slice(0u, inputVertices.numElements());
+  // ###### TEMPORARY ######
+
+  // ## proposed change ##
+  // auto fbGrainSize = 4;
+  // auto framebufferMapping = calculateMapping(vg, frameBuffer.size(), fbGrainSize);
+  // auto paddedFrameBuffer = vg.addVariable(FLOAT, {frameBuffer.size() + framebufferMapping.padding}, "padded_frame_buffer");
+  // applyTileMapping(vg, paddedFrameBuffer, framebufferMapping);
+  // auto outputFrameBuffer = paddedFrameBuffer.slice(0u, frameBuffer.size());
+  // #####################
+
 
   // Build a compute set to transform the points:
   const auto csName = disableAMPVertices ? "project" : "project_amp";
@@ -201,8 +213,15 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
   // Get the tile mapping and connect the vertices:
   const auto tm = vg.getTileMapping(paddedInput);
+
+  // ## proposed change ##
+  // const auto tmFb = vg.getTileMapping(paddedFrameBuffer);
+  // #####################
+
   for (auto t = 0u; t < tm.size(); ++t) {
+    ipu_utils::logger()->info("TILE : {} / {}", t, tm.size());
     const auto& m = tm[t];
+    // const auto& mFb = tmFb[t];
     if (m.size() > 1u) {
       throw std::runtime_error("Expected vertices to be stored as a single contiguous region per tile.");
     }
@@ -214,6 +233,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
       auto sliceIn  = paddedInput.slice(m.front());
       auto sliceOut = paddedOutput.slice(m.front());
+      // auto sliceFb = paddedFrameBuffer.slice(mFb.front());
 
       if (disableAMPVertices) {
         ipu_utils::logger()->warn("AMP vertex disabled on tile: {}", t);
@@ -228,6 +248,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   main.add(broadcastMvp);
   main.add(program::Execute(projectCs));
   main.add(outputVertices.buildRead(vg, true));
+  // main.add(outputFrameBuffer.buildRead(vg, true));
 
   getPrograms().add("write_verts", inputVertices.buildWrite(vg, true));
   getPrograms().add("project", main);
