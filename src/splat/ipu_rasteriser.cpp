@@ -28,6 +28,22 @@ IpuSplatter::IpuSplatter(const Points& verts, bool noAMP)
   }
 }
 
+// IpuSplatter::IpuSplatter(const Points& verts, splat::TiledFramebuffer& fb, bool noAMP)
+//   : modelViewProjection("mvp"), inputVertices("verts_in"), outputVertices("verts_out"),
+//     transformMatrix(16),
+//     initialised(false),
+//     disableAMPVertices(noAMP)
+// {
+//   hostVertices.reserve(4 * verts.size());
+//   for (const auto& v : verts) {
+//     hostVertices.push_back(v.p.x);
+//     hostVertices.push_back(v.p.y);
+//     hostVertices.push_back(v.p.z);
+//     hostVertices.push_back(1.f);
+//   }
+//   frameBuffer.resize(fb.width * fb.height * 4, 0.0f);
+// }
+
 void IpuSplatter::updateModelViewProjection(const glm::mat4& mvp) {
   auto mvpt = glm::transpose(mvp);
   auto ptr = (const float*)glm::value_ptr(mvpt);

@@ -131,6 +131,7 @@ int main(int argc, char** argv) {
   ipuSplatter->updateModelViewProjection(modelView * projection);
   gm.prepareEngine();
 
+  // dont need to allocate memory for clipSpace as proj is done in the IPU
   std::vector<glm::vec4> clipSpace;
   clipSpace.reserve(pts.size());
 
