@@ -29,14 +29,13 @@ private:
 
   ipu_utils::StreamableTensor modelViewProjection;
   ipu_utils::StreamableTensor inputVertices;
-  // ipu_utils::StreamableTensor outputVertices;
   ipu_utils::StreamableTensor outputFramebuffer;
   std::vector<float> transformMatrix;
   std::vector<float> hostVertices;
   TiledFramebuffer fbMapping;
   std::vector<float> frameBuffer;
   std::atomic<bool> initialised;
-  const bool disableAMPVertices;
+  const bool disableAMPVertices; 
 };
 
 } // end of namespace splat

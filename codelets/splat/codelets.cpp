@@ -32,6 +32,7 @@ class Transform4x4 : public poplar::MultiVertex {
 public:
   poplar::Input<poplar::Vector<float>> matrix;
   poplar::Input<poplar::Vector<float>> vertsIn;
+  poplar::Input<poplar::Vector<int>> tile_id;
   // instead of vertsOut we can have a vector of pixels 
   // corresponding to a pinned section of the framebuffer.
 
@@ -40,37 +41,53 @@ public:
   // in the array copy pattern to and from host
   poplar::Output<poplar::Vector<float>> vertsOut;
 
+  #define TILEHEIGHT 20.0f
+  #define TILEWIDTH 32.0f
+
+
   bool compute(unsigned workerId) {
     // Transpose because GLM storage order is column major:
     const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
 
-    if (workerId == 0) {
-      auto o = glm::make_vec4(&vertsOut[0]);
-      o.r = .9f;
-      o.g = 0.0f;
-      o.b = 0.0f;
-      o.a = 0.0f;
-      memcpy(&vertsOut[0], glm::value_ptr(o), sizeof(o));
+    // zero the output buffer
+    for (auto i = 0; i < vertsOut.size(); i += 4) {
+      auto o = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+      memcpy(&vertsOut[i], glm::value_ptr(o), sizeof(o));
     }
-    if (workerId == 5) {
 
-      // for (auto i = 0; i < vertsOut.size(); i += 4) {
-      //   auto o = glm::make_vec4(&vertsOut[i]);
-      //   o.r = 0.0f;
-      //   o.g = 0.0f;
-      //   o.b = 1.0f;
-      //   o.a = 0.0f;
-      //   o = m * o; 
-      //   memcpy(&vertsOut[i], glm::value_ptr(o), sizeof(o));
-      // }
-      auto o = glm::make_vec4(&vertsOut[vertsOut.size() - 4]);
-      o.r = 0.0f;
-      o.g = 0.0f;
-      o.b = .9;
-      o.a = 0.0f;
-      o = m * o;
-      memcpy(&vertsOut[vertsOut.size() - 4], glm::value_ptr(o), sizeof(o));
+    auto topLeft = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    auto bottomRight = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    float tid = float(tile_id[0]);
+
+    auto div = floor(tid / 40.0f);
+    auto mod = tid - div * 40.0f;
+    topLeft.x = float(int(mod * TILEWIDTH));
+    topLeft.y = float(int(div * TILEHEIGHT));
+    bottomRight.x = topLeft.x + TILEWIDTH;
+    bottomRight.y = topLeft.y + TILEHEIGHT;
+
+    for (auto i = 0; i < vertsIn.size(); i+=4) {
+      auto pt = glm::make_vec4(&vertsIn[i]);
+      pt = m * pt; 
+
+
+      if (pt.x < bottomRight.x && pt.x > topLeft.x && pt.y < bottomRight.y && pt.y > topLeft.y) {
+        auto o = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        o.b = 1.0f;
+
+        auto x = pt.x;
+        auto y = pt.y; 
+
+        auto xInTile = int(x - topLeft.x);
+        auto yInTile = int(y - topLeft.y);
+
+        auto idx = xInTile + yInTile * TILEWIDTH;
+      
+        memcpy(&vertsOut[idx], glm::value_ptr(o), sizeof(o));
+      }
     }
+
+         
 
 
 

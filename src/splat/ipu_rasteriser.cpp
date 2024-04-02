@@ -29,7 +29,7 @@ namespace splat {
 // }
 
 IpuSplatter::IpuSplatter(const Points& verts, splat::TiledFramebuffer& fb, bool noAMP)
-  : modelViewProjection("mvp"), inputVertices("verts_in"), outputFramebuffer("frame_buffer"),
+  : modelViewProjection("mvp"), inputVertices("verts_in"), outputFramebuffer("frame_buffer"), 
     transformMatrix(16),
     initialised(false),
     disableAMPVertices(noAMP),
@@ -171,7 +171,7 @@ void applyTileMapping(poplar::Graph& g, const poplar::Tensor& paddedInput, const
 }
 
 // Add a vertex to project vertices that uses vanilla C++ code.
-void addProjectionVertex(poplar::Graph& g, poplar::ComputeSet& cs, unsigned t,
+void addProjectionVertex(poplar::Graph& g, poplar::ComputeSet& cs, unsigned t, const poplar::Tensor& tid,
                          const poplar::Tensor& modelViewProjection, const poplar::Tensor& sliceIn, const poplar::Tensor& sliceOut) {
   auto v = g.addVertex(cs, "Transform4x4");
   g.setTileMapping(v, t);
@@ -179,6 +179,8 @@ void addProjectionVertex(poplar::Graph& g, poplar::ComputeSet& cs, unsigned t,
   g.connect(v["matrix"], modelViewProjection);
   g.connect(v["vertsIn"], sliceIn);
   g.connect(v["vertsOut"], sliceOut);
+  g.connect(v["tile_id"], tid);
+
 }
 
 // Add a vertex to project vertices that uses is optimised using the tile's AMP engine.
@@ -281,18 +283,21 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       vg.setTileMapping(localMvp, t);
       broadcastMvp.add(program::Copy(modelViewProjection, localMvp));
 
+      Tensor tid = graph.addConstant<int>(INT, {1}, {int(t)});
+      graph.setTileMapping(tid, t);
+
       auto sliceIn  = paddedInput.slice(m.front());
       // auto sliceOut = paddedOutput.slice(m.front());
       auto sliceFb = paddedFramebuffer.slice(mFb.front());
 
       if (disableAMPVertices) {
         ipu_utils::logger()->warn("AMP vertex disabled on tile: {}", t);
-        addProjectionVertex(vg, projectCs, t, localMvp.flatten(), sliceIn, sliceFb);
+        addProjectionVertex(vg, projectCs, t, tid, localMvp.flatten(), sliceIn, sliceFb);
       } else {
         addProjectionVertexAMP(vg, projectCs, t, localMvp.flatten(), sliceIn, sliceFb);
       }
     }
-  }
+  }                     
 
   program::Sequence main;
   main.add(broadcastMvp);
@@ -300,7 +305,10 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   // main.add(outputVertices.buildRead(vg, true));
   main.add(outputFramebuffer.buildRead(vg, true));
 
-  getPrograms().add("write_verts", inputVertices.buildWrite(vg, true));
+  program::Sequence setup;
+  setup.add(inputVertices.buildWrite(vg, true));
+
+  getPrograms().add("write_verts", setup);
   getPrograms().add("project", main);
 }
 
