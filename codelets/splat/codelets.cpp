@@ -44,14 +44,42 @@ public:
     // Transpose because GLM storage order is column major:
     const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
 
-    const auto startIndex = 4 * workerId;
-    for (auto i = startIndex; i < vertsIn.size(); i += 4 * numWorkers()) {
-      auto v = glm::make_vec4(&vertsIn[i]);
+    if (workerId == 0) {
+      auto o = glm::make_vec4(&vertsOut[0]);
+      o.r = .9f;
+      o.g = 0.0f;
+      o.b = 0.0f;
+      o.a = 0.0f;
+      memcpy(&vertsOut[0], glm::value_ptr(o), sizeof(o));
+    }
+    if (workerId == 5) {
+
+      // for (auto i = 0; i < vertsOut.size(); i += 4) {
+      //   auto o = glm::make_vec4(&vertsOut[i]);
+      //   o.r = 0.0f;
+      //   o.g = 0.0f;
+      //   o.b = 1.0f;
+      //   o.a = 0.0f;
+      //   o = m * o; 
+      //   memcpy(&vertsOut[i], glm::value_ptr(o), sizeof(o));
+      // }
+      auto o = glm::make_vec4(&vertsOut[vertsOut.size() - 4]);
+      o.r = 0.0f;
+      o.g = 0.0f;
+      o.b = .9;
+      o.a = 0.0f;
+      o = m * o;
+      memcpy(&vertsOut[vertsOut.size() - 4], glm::value_ptr(o), sizeof(o));
+    }
+
+
+
+    // for (auto i = 0; workerId == 0 && i < 1; i++) {
       // move the centre of the square to a new position
-      v = m * v;
       // init the square
-      struct square g1;
-      g1.centre = glm::make_vec4(&vertsIn[0]);
+      // struct square g1;
+      // g1.centre = m * glm::make_vec4(&vertsIn[i]);
+      
       // TODO: find some way to get the topleft and bottomright of the square
       // in screenspace coordinates.
       // g1.topleft = glm::make_vec2(&vertsIn[1]);
@@ -67,9 +95,33 @@ public:
       //      vertsOut[ID IN TILE] = 1.0;
       //    }
 
+    //   auto o = glm::make_vec4(&vertsOut[i]);
+    //   o.r = 1.0f;
+    //   o.g = 0.0f;
+    //   o.b = 0.0f;
+    //   o.a = 0.0f;
+      
+   
+    //   memcpy(&vertsOut[i], glm::value_ptr(o), sizeof(o));
+    // }
 
-      memcpy(&vertsOut[i], glm::value_ptr(v), sizeof(v));
-    }
+    // for (auto i = 0; workerId == 5 && i < vertsOut.size(); i += 4) {
+    //   auto o = glm::make_vec4(&vertsOut[i]);
+    //   o.r = 0.0f;
+    //   o.g = 0.0f;
+    //   o.b = 0.0f;
+    //   o.a = 0.0f;
+    //   // o = m * o; 
+
+    //   if (workerId == 1) {
+    //     o.g = 1.0f;
+    //   } 
+   
+    //   memcpy(&vertsOut[i], glm::value_ptr(o), sizeof(o));
+    // }
+
+
+
     return true;
   }
 };

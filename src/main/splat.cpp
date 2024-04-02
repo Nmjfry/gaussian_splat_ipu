@@ -155,7 +155,7 @@ int main(int argc, char** argv) {
       gm.execute(*ipuSplatter);
       // TODO: add a variable for splatted points count
       // from IPU to the host
-      ipuSplatter->splat::IpuSplatter::getFrameBuffer(*imagePtr);
+      ipuSplatter->getFrameBuffer(*imagePtr);
     }
 
     auto endTime = std::chrono::steady_clock::now();
