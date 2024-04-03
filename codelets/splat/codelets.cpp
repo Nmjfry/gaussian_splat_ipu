@@ -43,102 +43,95 @@ public:
 
   #define TILEHEIGHT 20.0f
   #define TILEWIDTH 32.0f
+  #define IMWIDTH 1280.0f
+  #define IMHEIGHT 720.0f
+
+  struct tileDims {
+    int tlx;
+    int tly;
+    int brx;
+    int bry;
+  };
+
+  struct tileDims getTileDims(int tid) {
+    struct tileDims dims;
+    auto numBlocksWidth = IMWIDTH / TILEWIDTH;
+    auto div = floor(tid / numBlocksWidth);
+    auto mod = tid - div * numBlocksWidth;
+    dims.tlx = int(floor(mod * TILEWIDTH));
+    dims.tly = int(floor(div * TILEHEIGHT));
+    dims.brx = dims.tlx + int(TILEWIDTH);
+    dims.bry = dims.tly + int(TILEHEIGHT);
+    return dims;
+  }
+
+
+// Object that holds the viewpoint specification and apply
+// various viewport transforms:
+struct Viewport {
+  Viewport(float x, float y, float width, float height)
+    : spec(x, y, width, height) {}
+
+  // The input point should be in normalised device coords
+  // (i.e. perspective division is already applied):
+  glm::vec2 ndcToViewport(glm::vec4 ndc) const {
+    glm::vec2 vp(ndc.x, ndc.y);
+    vp *= .5f;
+    vp += .5f;
+    return viewportTransform(vp);
+  }
+
+  // Combine perspective division with viewport scaling:
+  glm::vec2 clipSpaceToViewport(glm::vec4 cs) const {
+    glm::vec2 vp(cs.x, cs.y);
+    vp *= .5f / cs.w;
+    vp += .5f;
+    return viewportTransform(vp);
+  }
+
+  // Converts from normalised screen coords to the specified view window:
+  glm::vec2 viewportTransform(glm::vec2 v) const {
+    v.x *= spec[2];
+    v.y *= spec[3];
+    v.x += spec[0];
+    v.y += spec[1];
+    return v;
+  }
+
+  glm::vec4 spec;
+};
+
 
 
   bool compute(unsigned workerId) {
     // Transpose because GLM storage order is column major:
     const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
+    struct Viewport viewport(0.f, 0.f, IMWIDTH, IMHEIGHT);
+    struct tileDims dims = getTileDims(tile_id[0]);
+    auto colour = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
 
-    // zero the output buffer
-    for (auto i = 0; i < vertsOut.size(); i += 4) {
-      auto o = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-      memcpy(&vertsOut[i], glm::value_ptr(o), sizeof(o));
+    for (auto i = 0; i < vertsOut.size(); i+=4) {
+      auto black = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
+      memcpy(&vertsOut[i], glm::value_ptr(black), sizeof(black));
     }
-
-    auto topLeft = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-    auto bottomRight = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-    float tid = float(tile_id[0]);
-
-    auto div = floor(tid / 40.0f);
-    auto mod = tid - div * 40.0f;
-    topLeft.x = float(int(mod * TILEWIDTH));
-    topLeft.y = float(int(div * TILEHEIGHT));
-    bottomRight.x = topLeft.x + TILEWIDTH;
-    bottomRight.y = topLeft.y + TILEHEIGHT;
 
     for (auto i = 0; i < vertsIn.size(); i+=4) {
       auto pt = glm::make_vec4(&vertsIn[i]);
       pt = m * pt; 
+      glm::vec2 windowCoords = viewport.clipSpaceToViewport(pt);
 
+      if (windowCoords.x < dims.brx && windowCoords.x > dims.tlx && windowCoords.y < dims.bry && windowCoords.y > dims.tly) {
+        auto xInTile = floor(windowCoords.x - dims.tlx);
+        auto yInTile = floor(windowCoords.y - dims.tly);
 
-      if (pt.x < bottomRight.x && pt.x > topLeft.x && pt.y < bottomRight.y && pt.y > topLeft.y) {
-        auto o = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-        o.b = 1.0f;
-
-        auto x = pt.x;
-        auto y = pt.y; 
-
-        auto xInTile = int(x - topLeft.x);
-        auto yInTile = int(y - topLeft.y);
-
-        auto idx = xInTile + yInTile * TILEWIDTH;
+        auto idx = int(xInTile + yInTile * TILEWIDTH);
       
-        memcpy(&vertsOut[idx], glm::value_ptr(o), sizeof(o));
+        memcpy(&vertsOut[idx * 4], glm::value_ptr(colour), sizeof(colour));
       }
     }
 
+
          
-
-
-
-    // for (auto i = 0; workerId == 0 && i < 1; i++) {
-      // move the centre of the square to a new position
-      // init the square
-      // struct square g1;
-      // g1.centre = m * glm::make_vec4(&vertsIn[i]);
-      
-      // TODO: find some way to get the topleft and bottomright of the square
-      // in screenspace coordinates.
-      // g1.topleft = glm::make_vec2(&vertsIn[1]);
-      // g1.bottomright = glm::make_vec2(&vertsIn[2]);
-      
-      // rasterise the square
-
-      // for (int i = g1.topleft.x; i < g1.bottomright.x; i++) {
-      //  for (int j = g1.topleft.y; j < g1.bottomright.y; j++) {
-      //    // if the pixel is within the square
-      //    if (i > (IMWIDTH / tileID) && i < (IMWIDTH / tileID) && j > (IMHEIGHT / tileID) && j < (IMHEIGHT / tileID)) {
-      //      // colour the pixel
-      //      vertsOut[ID IN TILE] = 1.0;
-      //    }
-
-    //   auto o = glm::make_vec4(&vertsOut[i]);
-    //   o.r = 1.0f;
-    //   o.g = 0.0f;
-    //   o.b = 0.0f;
-    //   o.a = 0.0f;
-      
-   
-    //   memcpy(&vertsOut[i], glm::value_ptr(o), sizeof(o));
-    // }
-
-    // for (auto i = 0; workerId == 5 && i < vertsOut.size(); i += 4) {
-    //   auto o = glm::make_vec4(&vertsOut[i]);
-    //   o.r = 0.0f;
-    //   o.g = 0.0f;
-    //   o.b = 0.0f;
-    //   o.a = 0.0f;
-    //   // o = m * o; 
-
-    //   if (workerId == 1) {
-    //     o.g = 1.0f;
-    //   } 
-   
-    //   memcpy(&vertsOut[i], glm::value_ptr(o), sizeof(o));
-    // }
-
-
-
     return true;
   }
 };

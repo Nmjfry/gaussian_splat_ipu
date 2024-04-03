@@ -153,8 +153,6 @@ int main(int argc, char** argv) {
       pvti::Tracepoint scoped(&traceChannel, "mvp_transform_ipu");
       ipuSplatter->updateModelViewProjection(projection * dynamicView);
       gm.execute(*ipuSplatter);
-      // TODO: add a variable for splatted points count
-      // from IPU to the host
       ipuSplatter->getFrameBuffer(*imagePtr);
     }
 
@@ -170,6 +168,7 @@ int main(int argc, char** argv) {
       // Update projection:
       projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
       // Update modelview:
+      
       dynamicView = modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(0.f, 1.f, 0.f));
     } else {
       // Only log these if not in interactive mode:
