@@ -238,13 +238,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   ipu_utils::logger()->info("Size of padded input: {}", paddedInput.numElements());
 
   printf("input size: %lu, %lu\n", hostVertices.size(), frameBuffer.size());
-  // ###### TEMPORARY ######
-  // Clone the input to make the output:
-  // auto paddedOutput = vg.clone(paddedInput, "verts_out");
-  // outputVertices = paddedOutput.slice(0u, inputVertices.numElements());
-  // ###### TEMPORARY ######
 
-  // ## proposed change ##
   auto fbGrainSize = 4;
   auto framebufferMapping = calculateFBMapping(frameBuffer.size(), fbGrainSize, mapping);
   printf("Framebuffer layout: %lu, %lu, %lu\n", framebufferMapping.padding, framebufferMapping.elementsPerTile, framebufferMapping.totalTiles);
@@ -256,7 +250,6 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
   ipu_utils::logger()->info("Size of padded framebuffer: {}", paddedFramebuffer.numElements());
   ipu_utils::logger()->info("Size of output framebuffer: {}", outputFramebuffer.numElements());
-  // #####################
 
 
   // Build a compute set to transform the points:
@@ -265,11 +258,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
   // Get the tile mapping and connect the vertices:
   const auto tm = vg.getTileMapping(paddedInput);
-
-  // ## proposed change ##
-
   const auto tmFb = vg.getTileMapping(paddedFramebuffer);
-  // #####################
 
   for (auto t = 0u; t < tm.size(); ++t) {
     const auto& m = tm[t];

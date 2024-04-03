@@ -23,3 +23,17 @@ implement the following changes in order:
      
      vertsOut.size() // tu
 
+
+
+
+
+xy -> fb pixel
+fb pixel -> xy 
+xy -> local pixel (tile)
+local pixel (tile) -> xy
+
+1. give the points a square extent
+2. refactor viewport to do all coordinate transforms (above)
+3. sort the points so they exhibit better spacial locality.
+4. get the histogram to display point distribution and timing info
+

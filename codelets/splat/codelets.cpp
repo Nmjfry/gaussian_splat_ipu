@@ -66,42 +66,59 @@ public:
   }
 
 
-// Object that holds the viewpoint specification and apply
-// various viewport transforms:
-struct Viewport {
-  Viewport(float x, float y, float width, float height)
-    : spec(x, y, width, height) {}
+  // Object that holds the viewpoint specification and apply
+  // various viewport transforms:
+  struct Viewport {
+    Viewport(float x, float y, float width, float height)
+      : spec(x, y, width, height) {}
 
-  // The input point should be in normalised device coords
-  // (i.e. perspective division is already applied):
-  glm::vec2 ndcToViewport(glm::vec4 ndc) const {
-    glm::vec2 vp(ndc.x, ndc.y);
-    vp *= .5f;
-    vp += .5f;
-    return viewportTransform(vp);
+    // The input point should be in normalised device coords
+    // (i.e. perspective division is already applied):
+    glm::vec2 ndcToViewport(glm::vec4 ndc) const {
+      glm::vec2 vp(ndc.x, ndc.y);
+      vp *= .5f;
+      vp += .5f;
+      return viewportTransform(vp);
+    }
+
+    // Combine perspective division with viewport scaling:
+    glm::vec2 clipSpaceToViewport(glm::vec4 cs) const {
+      glm::vec2 vp(cs.x, cs.y);
+      vp *= .5f / cs.w;
+      vp += .5f;
+      return viewportTransform(vp);
+    }
+
+    // Converts from normalised screen coords to the specified view window:
+    glm::vec2 viewportTransform(glm::vec2 v) const {
+      v.x *= spec[2];
+      v.y *= spec[3];
+      v.x += spec[0];
+      v.y += spec[1];
+      return v;
+    }
+
+    glm::vec4 spec;
+  };
+
+  int toByteBufferIndex(int x, int y) {
+    return int(x + y * TILEWIDTH) * 4;
+  } 
+
+  void splat(int x, int y, glm::vec4 colour, poplar::Vector<float>& vertsOut) {
+
+    // render 10 by 10 square around the point
+    for (auto i = -5; i < 5; i++) {
+      for (auto j = -5; j < 5; j++) {
+        auto newx = x + i;
+        auto newy = y + j;
+        auto index = toByteBufferIndex(newx, newy);
+        if (index < vertsOut.size() && index >= 0 && newx < TILEWIDTH && newx >= 0 && newy < TILEHEIGHT && newy >= 0) {
+          memcpy(&vertsOut[index], glm::value_ptr(colour), sizeof(colour));
+        }
+      }
+    }
   }
-
-  // Combine perspective division with viewport scaling:
-  glm::vec2 clipSpaceToViewport(glm::vec4 cs) const {
-    glm::vec2 vp(cs.x, cs.y);
-    vp *= .5f / cs.w;
-    vp += .5f;
-    return viewportTransform(vp);
-  }
-
-  // Converts from normalised screen coords to the specified view window:
-  glm::vec2 viewportTransform(glm::vec2 v) const {
-    v.x *= spec[2];
-    v.y *= spec[3];
-    v.x += spec[0];
-    v.y += spec[1];
-    return v;
-  }
-
-  glm::vec4 spec;
-};
-
-
 
   bool compute(unsigned workerId) {
     // Transpose because GLM storage order is column major:
@@ -119,18 +136,12 @@ struct Viewport {
       auto pt = glm::make_vec4(&vertsIn[i]);
       pt = m * pt; 
       glm::vec2 windowCoords = viewport.clipSpaceToViewport(pt);
-
       if (windowCoords.x < dims.brx && windowCoords.x > dims.tlx && windowCoords.y < dims.bry && windowCoords.y > dims.tly) {
         auto xInTile = floor(windowCoords.x - dims.tlx);
         auto yInTile = floor(windowCoords.y - dims.tly);
-
-        auto idx = int(xInTile + yInTile * TILEWIDTH);
-      
-        memcpy(&vertsOut[idx * 4], glm::value_ptr(colour), sizeof(colour));
+        splat(xInTile, yInTile, colour, vertsOut);
       }
     }
-
-
          
     return true;
   }
