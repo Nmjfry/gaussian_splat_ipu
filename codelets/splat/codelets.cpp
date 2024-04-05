@@ -19,13 +19,15 @@
 #define IMHEIGHT 720.0f
 
 struct square {
-  glm::vec2 centre;
+  glm::vec4 centre;
   glm::vec2 topleft;
   glm::vec2 bottomright;
+  glm::vec4 colour = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
 
-  square(glm::vec2 c) : centre(c) {
+  square(glm::vec2 c) {
     topleft = glm::vec2(c.x - 5, c.y - 5);
     bottomright = glm::vec2(c.x + 5, c.y + 5);
+    centre = glm::vec4(c.x, c.y, 0.0f, 1.0f);
   }
 };
 
@@ -48,8 +50,8 @@ struct tileDims {
 // Object that holds the viewpoint specification and apply
 // various viewport transforms:
 struct Viewport {
-  Viewport(float x, float y, float width, float height)
-    : spec(x, y, width, height) {}
+  Viewport(float x, float y, float width, float height, unsigned tid)
+    : spec(x, y, width, height), td(tid) {}
 
   // Combine perspective division with viewport scaling:
   glm::vec2 clipSpaceToViewport(glm::vec4 cs) const {
@@ -57,6 +59,17 @@ struct Viewport {
     vp *= .5f / cs.w;
     vp += .5f;
     return viewportTransform(vp);
+  }
+
+  // Converts from window coordinates to local tile coordinates:
+  glm::vec2 viewportToTile(glm::vec2 windowCoords, struct tileDims td) const {
+    return glm::vec2(floor(windowCoords.x - td.topleft.x), floor(windowCoords.y - td.topleft.y));
+  }
+
+  // Converts from clip space to tile coordinates:
+  glm::vec2 clipSpaceToTile(glm::vec4 cs) const {
+    glm::vec2 vp = clipSpaceToViewport(cs);
+    return viewportToTile(vp, td);
   }
 
   // Converts from normalised screen coords to the specified view window:
@@ -69,6 +82,7 @@ struct Viewport {
   }
 
   glm::vec4 spec;
+  struct tileDims td;
 };
 
 // Multi-Vertex to transform every 4x1 vector
@@ -90,20 +104,21 @@ public:
   // instead of vertsOut we can have a vector of pixels 
   // corresponding to a pinned section of the framebuffer.
   poplar::Output<poplar::Vector<float>> localFb;
+  unsigned bytesMoved = 0;
+
 
   int toByteBufferIndex(glm::vec2 pt) {
     return int(pt.x + pt.y * TILEWIDTH) * 4;
   } 
 
+  bool isWithinTileBounds(glm::vec4 pt) {
+    return pt.x >= 0 && pt.x < TILEWIDTH && pt.y >= 0 && pt.y < TILEHEIGHT;
+  }
   bool isWithinTileBounds(glm::vec2 pt) {
     return pt.x >= 0 && pt.x < TILEWIDTH && pt.y >= 0 && pt.y < TILEHEIGHT;
   }
 
-  glm::vec2 windowCoordsToTileCoords(glm::vec2 windowCoords, struct tileDims dims) {
-    return glm::vec2(floor(windowCoords.x - dims.topleft.x), floor(windowCoords.y - dims.topleft.y));
-  }
-
-  void splat(struct square sq, glm::vec4 colour, poplar::Vector<float>& localFb) {
+  void splat(struct square sq, poplar::Vector<float>& localFb) {
     for (auto i = sq.topleft.x; i < sq.bottomright.x; i++) {
       for (auto j = sq.topleft.y; j < sq.bottomright.y; j++) {
         auto rasterPixel = glm::vec2(i, j);
@@ -114,8 +129,22 @@ public:
         }
         auto index = toByteBufferIndex(rasterPixel);
         if (index < localFb.size() && index >= 0) {
-          memcpy(&localFb[index], glm::value_ptr(colour), sizeof(colour));
+          memcpy(&localFb[index], glm::value_ptr(sq.colour), sizeof(sq.colour));
         }
+      }
+    }
+  }
+
+  void rasterise(struct square sq, glm::vec4 unprojectedCentre) {
+    if (isWithinTileBounds(sq.centre)) {
+        // keep the center point on this tile
+        splat(sq, localFb);
+    } else {
+      // determine which neighboring tile the point should be sent to
+      if ((sq.centre.x >= TILEWIDTH || sq.centre.y >= TILEHEIGHT) && bytesMoved < eastOut.size() - sizeof(sq)) {
+        void* ptr = (void*) &eastOut[bytesMoved];
+        memcpy(ptr, glm::value_ptr(unprojectedCentre), sizeof(sq));
+        bytesMoved+=sizeof(sq);
       }
     }
   }
@@ -123,9 +152,7 @@ public:
   bool compute(unsigned workerId) {
     // Transpose because GLM storage order is column major:
     const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
-    struct Viewport viewport(0.f, 0.f, IMWIDTH, IMHEIGHT);
-    auto dims = tileDims(tile_id[0]);
-    auto colour = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
+    struct Viewport viewport(0.f, 0.f, IMWIDTH, IMHEIGHT, tile_id[0]);
 
     for (auto i = 0; i < localFb.size(); i+=4) {
       auto black = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -133,19 +160,25 @@ public:
     }
 
     for (auto i = 0; i < vertsIn.size(); i+=4) {
-      auto pt = glm::make_vec4(&vertsIn[i]);
-      pt = m * pt; 
-      glm::vec2 windowCoords = viewport.clipSpaceToViewport(pt);
-      glm::vec2 tileCoords = windowCoordsToTileCoords(windowCoords, dims);
-      if (isWithinTileBounds(tileCoords)) {
-        // keep the center point on this tile
-        auto sq = square(tileCoords);
-        splat(sq, colour, localFb);
-      } else {
-        // determine which neighboring tile the point should be sent to
-      }
+      auto upt = glm::make_vec4(&vertsIn[i]);
+      auto pt = m * upt; 
+      glm::vec2 tileCoords = viewport.clipSpaceToTile(pt);
+      auto sq = square(tileCoords);
+      rasterise(sq, upt);
     }
-         
+
+    for (auto i = 0; i < westIn.size(); i+=sizeof(struct square)) {
+      auto upcentre = glm::make_vec4(&westIn[i]);
+      auto colour = glm::make_vec4(&westIn[i+sizeof(glm::vec4)+sizeof(glm::vec2)+sizeof(glm::vec2)]);
+      auto centre = m * upcentre; 
+      glm::vec2 tileCoords = viewport.clipSpaceToTile(centre);
+      auto sq = square(tileCoords);
+      sq.colour.r = tile_id[0] * (1.0f / 1440);
+      sq.colour.b = 1.0f;
+      sq.colour.g = 0.0f;
+      rasterise(sq, upcentre);
+    }
+
     return true;
   }
 };

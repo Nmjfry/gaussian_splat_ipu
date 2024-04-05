@@ -12,21 +12,18 @@ using namespace poplar;
 
 namespace splat {
 
-/// Name the streamable tensors and take a reference to the point data:
-// IpuSplatter::IpuSplatter(const Points& verts, bool noAMP)
-//   : modelViewProjection("mvp"), inputVertices("verts_in"), outputVertices("verts_out"),
-//     transformMatrix(16),
-//     initialised(false),
-//     disableAMPVertices(noAMP)
-// {
-//   hostVertices.reserve(4 * verts.size());
-//   for (const auto& v : verts) {
-//     hostVertices.push_back(v.p.x);
-//     hostVertices.push_back(v.p.y);
-//     hostVertices.push_back(v.p.z);
-//     hostVertices.push_back(1.f);
-//   }
-// }
+struct square {
+  glm::vec4 centre;
+  glm::vec2 topleft;
+  glm::vec2 bottomright;
+  glm::vec4 colour = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
+
+  square(glm::vec2 c) {
+    topleft = glm::vec2(c.x - 5, c.y - 5);
+    bottomright = glm::vec2(c.x + 5, c.y + 5);
+    centre = glm::vec4(c.x, c.y, 0.0f, 1.0f);
+  }
+};
 
 IpuSplatter::IpuSplatter(const Points& verts, splat::TiledFramebuffer& fb, bool noAMP)
   : modelViewProjection("mvp"), inputVertices("verts_in"), outputFramebuffer("frame_buffer"), 
@@ -265,7 +262,9 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   const auto tm = vg.getTileMapping(paddedInput);
   const auto tmFb = vg.getTileMapping(paddedFramebuffer);
 
-  auto eastOut = vg.addVariable(FLOAT, {100}, "points_to_east");
+  uint64 sizeof_square = sizeof(struct square);
+  uint64 numSparePoints = 200;
+  auto eastOut = vg.addVariable(FLOAT, {numSparePoints * sizeof_square}, "points_to_east");
   vg.setTileMapping(eastOut, 0u);
 
   for (auto t = 0u; t < tm.size(); ++t) {
@@ -285,7 +284,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       // each tile will read from write to its own 8 in/out streams
       auto nextTile = t + 1;
 
-      auto westIn = vg.addVariable(FLOAT, {100}, "points_from_west");
+      auto westIn = vg.addVariable(FLOAT, {numSparePoints * sizeof_square}, "points_from_west");
       vg.setTileMapping(westIn, nextTile);
       broadcastPoints.add(program::Copy(eastOut, westIn));
 
@@ -304,7 +303,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       // }
 
       if (nextTile < 1439) {
-        auto eastOutNext = vg.addVariable(FLOAT, {100}, "points_to_east");
+        auto eastOutNext = vg.addVariable(FLOAT, {numSparePoints * sizeof_square}, "points_to_east");
         vg.setTileMapping(eastOutNext, nextTile);
         eastOut = eastOutNext;
       }
