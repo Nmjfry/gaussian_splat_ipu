@@ -101,7 +101,7 @@ public:
   }
 
   glm::vec2 windowCoordsToTileCoords(glm::vec2 windowCoords, struct tileDims dims) {
-    return glm::vec2(windowCoords.x - dims.topleft.x, windowCoords.y - dims.topleft.y);
+    return glm::vec2(floor(windowCoords.x - dims.topleft.x), floor(windowCoords.y - dims.topleft.y));
   }
 
   void splat(struct square sq, glm::vec4 colour, poplar::Vector<float>& localFb) {
