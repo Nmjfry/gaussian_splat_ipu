@@ -3,6 +3,8 @@
 #include <splat/file_io.hpp>
 
 #include <sstream>
+#include <algorithm>
+#include <random>
 
 namespace splat {
 
@@ -18,6 +20,9 @@ Points loadXyz(std::istream&& s) {
     ss >> p.x >> p.y >> p.z;
     pts.push_back({p, ones});
   }
+
+  auto rng = std::default_random_engine {};
+  std::shuffle(std::begin(pts), std::end(pts), rng);
 
   return pts;
 }

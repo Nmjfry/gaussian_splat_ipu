@@ -14,7 +14,7 @@
 #endif
 
 struct square {
-  glm::vec4 centre;
+  glm::vec2 centre;
   glm::vec2 topleft;
   glm::vec2 bottomright;
 };
@@ -33,13 +33,11 @@ public:
   poplar::Input<poplar::Vector<float>> matrix;
   poplar::Input<poplar::Vector<float>> vertsIn;
   poplar::Input<poplar::Vector<int>> tile_id;
+  poplar::Input<poplar::Vector<float>> westIn; 
+  poplar::Input<poplar::Vector<float>> eastOut;
   // instead of vertsOut we can have a vector of pixels 
   // corresponding to a pinned section of the framebuffer.
-
-  // we need to configure the shape of this vector so that 
-  // it can be a particular segment of the image. This can be done
-  // in the array copy pattern to and from host
-  poplar::Output<poplar::Vector<float>> vertsOut;
+  poplar::Output<poplar::Vector<float>> localFb;
 
   #define TILEHEIGHT 20.0f
   #define TILEWIDTH 32.0f
@@ -47,10 +45,8 @@ public:
   #define IMHEIGHT 720.0f
 
   struct tileDims {
-    int tlx;
-    int tly;
-    int brx;
-    int bry;
+    glm::vec2 topleft;
+    glm::vec2 bottomright;
   };
 
   struct tileDims getTileDims(int tid) {
@@ -58,28 +54,18 @@ public:
     auto numBlocksWidth = IMWIDTH / TILEWIDTH;
     auto div = floor(tid / numBlocksWidth);
     auto mod = tid - div * numBlocksWidth;
-    dims.tlx = int(floor(mod * TILEWIDTH));
-    dims.tly = int(floor(div * TILEHEIGHT));
-    dims.brx = dims.tlx + int(TILEWIDTH);
-    dims.bry = dims.tly + int(TILEHEIGHT);
+    dims.topleft.x = int(floor(mod * TILEWIDTH));
+    dims.topleft.y = int(floor(div * TILEHEIGHT));
+    dims.bottomright.x = dims.topleft.x + int(TILEWIDTH);
+    dims.bottomright.y = dims.topleft.y + int(TILEHEIGHT);
     return dims;
   }
-
 
   // Object that holds the viewpoint specification and apply
   // various viewport transforms:
   struct Viewport {
     Viewport(float x, float y, float width, float height)
       : spec(x, y, width, height) {}
-
-    // The input point should be in normalised device coords
-    // (i.e. perspective division is already applied):
-    glm::vec2 ndcToViewport(glm::vec4 ndc) const {
-      glm::vec2 vp(ndc.x, ndc.y);
-      vp *= .5f;
-      vp += .5f;
-      return viewportTransform(vp);
-    }
 
     // Combine perspective division with viewport scaling:
     glm::vec2 clipSpaceToViewport(glm::vec4 cs) const {
@@ -101,20 +87,26 @@ public:
     glm::vec4 spec;
   };
 
-  int toByteBufferIndex(int x, int y) {
-    return int(x + y * TILEWIDTH) * 4;
+  int toByteBufferIndex(glm::vec2 pt) {
+    return int(pt.x + pt.y * TILEWIDTH) * 4;
   } 
 
-  void splat(int x, int y, glm::vec4 colour, poplar::Vector<float>& vertsOut) {
+  bool isWithinTileBounds(glm::vec2 pt) {
+    return pt.x >= 0 && pt.x < TILEWIDTH && pt.y >= 0 && pt.y < TILEHEIGHT;
+  }
 
+  glm::vec2 windowCoordsToTileCoords(glm::vec2 windowCoords, struct tileDims dims) {
+    return glm::vec2(windowCoords.x - dims.topleft.x, windowCoords.y - dims.topleft.y);
+  }
+
+  void splat(glm::vec2 tileCoords, glm::vec4 colour, poplar::Vector<float>& localFb) {
     // render 10 by 10 square around the point
     for (auto i = -5; i < 5; i++) {
       for (auto j = -5; j < 5; j++) {
-        auto newx = x + i;
-        auto newy = y + j;
-        auto index = toByteBufferIndex(newx, newy);
-        if (index < vertsOut.size() && index >= 0 && newx < TILEWIDTH && newx >= 0 && newy < TILEHEIGHT && newy >= 0) {
-          memcpy(&vertsOut[index], glm::value_ptr(colour), sizeof(colour));
+        auto newpt = glm::vec2(tileCoords.x + i, tileCoords.y + j);
+        auto index = toByteBufferIndex(newpt);
+        if (index < localFb.size() && index >= 0 && isWithinTileBounds(newpt)) {
+          memcpy(&localFb[index], glm::value_ptr(colour), sizeof(colour));
         }
       }
     }
@@ -127,19 +119,18 @@ public:
     struct tileDims dims = getTileDims(tile_id[0]);
     auto colour = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
 
-    for (auto i = 0; i < vertsOut.size(); i+=4) {
+    for (auto i = 0; i < localFb.size(); i+=4) {
       auto black = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
-      memcpy(&vertsOut[i], glm::value_ptr(black), sizeof(black));
+      memcpy(&localFb[i], glm::value_ptr(black), sizeof(black));
     }
 
     for (auto i = 0; i < vertsIn.size(); i+=4) {
       auto pt = glm::make_vec4(&vertsIn[i]);
       pt = m * pt; 
       glm::vec2 windowCoords = viewport.clipSpaceToViewport(pt);
-      if (windowCoords.x < dims.brx && windowCoords.x > dims.tlx && windowCoords.y < dims.bry && windowCoords.y > dims.tly) {
-        auto xInTile = floor(windowCoords.x - dims.tlx);
-        auto yInTile = floor(windowCoords.y - dims.tly);
-        splat(xInTile, yInTile, colour, vertsOut);
+      glm::vec2 tileCoords = windowCoordsToTileCoords(windowCoords, dims);
+      if (isWithinTileBounds(tileCoords)) {
+        splat(tileCoords, colour, localFb);
       }
     }
          
@@ -147,21 +138,6 @@ public:
   }
 };
 
-
-/*
-
-Tile Rasteriser for one gaussian:
-
-1. use a point in vertsIn as the center of a gaussian
-2. create a lightweight gaussian class within SRAM of tile
-
-3. use compute vertex to iterate over pixels in the out buffer:
-      if pixel is within bounds of covariance matrix: 
-          colour with gaussian 
-      else:
-          leave black
-
-*/
 
 #define CCCSLOAD 80
 

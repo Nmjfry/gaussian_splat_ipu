@@ -171,15 +171,17 @@ void applyTileMapping(poplar::Graph& g, const poplar::Tensor& paddedInput, const
 }
 
 // Add a vertex to project vertices that uses vanilla C++ code.
-void addProjectionVertex(poplar::Graph& g, poplar::ComputeSet& cs, unsigned t, const poplar::Tensor& tid,
+void addProjectionVertex(poplar::Graph& g, poplar::ComputeSet& cs, unsigned t, const poplar::Tensor& tid,  const poplar::Tensor& westIn, const poplar::Tensor& eastOut,
                          const poplar::Tensor& modelViewProjection, const poplar::Tensor& sliceIn, const poplar::Tensor& sliceOut) {
   auto v = g.addVertex(cs, "Transform4x4");
   g.setTileMapping(v, t);
 
   g.connect(v["matrix"], modelViewProjection);
   g.connect(v["vertsIn"], sliceIn);
-  g.connect(v["vertsOut"], sliceOut);
+  g.connect(v["localFb"], sliceOut);
   g.connect(v["tile_id"], tid);
+  g.connect(v["westIn"], westIn);
+  g.connect(v["eastOut"], eastOut);
 
 }
 
@@ -237,7 +239,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   ipu_utils::logger()->info("Size input: {}", inputVertices.numElements());
   ipu_utils::logger()->info("Size of padded input: {}", paddedInput.numElements());
 
-  printf("input size: %lu, %lu\n", hostVertices.size(), frameBuffer.size());
+  printf("input sizes - points:%lu, framebuffer:%lu\n", hostVertices.size(), frameBuffer.size());
 
   auto fbGrainSize = 4;
   auto framebufferMapping = calculateFBMapping(frameBuffer.size(), fbGrainSize, mapping);
@@ -248,8 +250,11 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   outputFramebuffer = paddedFramebuffer.slice(0, frameBuffer.size());
 
 
-  ipu_utils::logger()->info("Size of padded framebuffer: {}", paddedFramebuffer.numElements());
-  ipu_utils::logger()->info("Size of output framebuffer: {}", outputFramebuffer.numElements());
+
+  
+  // this program sequence will copy the points between all the tiles in the graph
+  program::Sequence broadcastPoints;
+
 
 
   // Build a compute set to transform the points:
@@ -259,6 +264,9 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   // Get the tile mapping and connect the vertices:
   const auto tm = vg.getTileMapping(paddedInput);
   const auto tmFb = vg.getTileMapping(paddedFramebuffer);
+
+  auto eastOut = vg.addVariable(FLOAT, {100}, "points_to_east");
+  vg.setTileMapping(eastOut, 0u);
 
   for (auto t = 0u; t < tm.size(); ++t) {
     const auto& m = tm[t];
@@ -272,26 +280,41 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       vg.setTileMapping(localMvp, t);
       broadcastMvp.add(program::Copy(modelViewProjection, localMvp));
 
-      Tensor tid = graph.addConstant<int>(INT, {1}, {int(t)});
-      graph.setTileMapping(tid, t);
+      // each tile will write misplaced points to 4 vectors depending on the final destination 
+      // at exchange, the four vectors are copied to the neighbouring tiles 
+      // each tile will read from write to its own 8 in/out streams
+      auto nextTile = t + 1;
+
+      auto westIn = vg.addVariable(FLOAT, {100}, "points_from_west");
+      vg.setTileMapping(westIn, nextTile);
+      broadcastPoints.add(program::Copy(eastOut, westIn));
+
+      Tensor tid = vg.addConstant<int>(INT, {1}, {int(t)});
+      vg.setTileMapping(tid, t);
 
       auto sliceIn  = paddedInput.slice(m.front());
-      // auto sliceOut = paddedOutput.slice(m.front());
       auto sliceFb = paddedFramebuffer.slice(mFb.front());
 
-      if (disableAMPVertices) {
-        ipu_utils::logger()->warn("AMP vertex disabled on tile: {}", t);
-        addProjectionVertex(vg, projectCs, t, tid, localMvp.flatten(), sliceIn, sliceFb);
-      } else {
-        addProjectionVertexAMP(vg, projectCs, t, localMvp.flatten(), sliceIn, sliceFb);
+      // if (disableAMPVertices) {
+      ipu_utils::logger()->warn("AMP vertex disabled on tile: {}", t);
+      addProjectionVertex(vg, projectCs, t, tid, westIn, eastOut, localMvp.flatten(), sliceIn, sliceFb);
+      // } else {
+        // disabled for now
+      //   addProjectionVertexAMP(vg, projectCs, t, localMvp.flatten(), sliceIn, sliceFb);
+      // }
+
+      if (nextTile < 1439) {
+        auto eastOutNext = vg.addVariable(FLOAT, {100}, "points_to_east");
+        vg.setTileMapping(eastOutNext, nextTile);
+        eastOut = eastOutNext;
       }
     }
   }                     
 
   program::Sequence main;
   main.add(broadcastMvp);
+  main.add(broadcastPoints);
   main.add(program::Execute(projectCs));
-  // main.add(outputVertices.buildRead(vg, true));
   main.add(outputFramebuffer.buildRead(vg, true));
 
   program::Sequence setup;
@@ -306,10 +329,7 @@ void IpuSplatter::execute(poplar::Engine& engine, const poplar::Device& device) 
     initialised = true;
     modelViewProjection.connectWriteStream(engine, transformMatrix);
     inputVertices.connectWriteStream(engine, hostVertices);
-    printf("sizes: %lu, %lu\n", hostVertices.size(), frameBuffer.size());
-    printf("sizes: %lu, %lu\n", inputVertices.numElements(), outputFramebuffer.numElements());
     outputFramebuffer.connectReadStream(engine, frameBuffer);
-    // outputVertices.connectReadStream(engine, hostVertices);
     getPrograms().run(engine, "write_verts");
   }
 
