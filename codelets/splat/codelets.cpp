@@ -17,6 +17,11 @@ struct square {
   glm::vec2 centre;
   glm::vec2 topleft;
   glm::vec2 bottomright;
+
+  square(glm::vec2 c) : centre(c) {
+    topleft = glm::vec2(c.x - 5, c.y - 5);
+    bottomright = glm::vec2(c.x + 5, c.y + 5);
+  }
 };
 
 // Multi-Vertex to transform every 4x1 vector
@@ -99,11 +104,11 @@ public:
     return glm::vec2(windowCoords.x - dims.topleft.x, windowCoords.y - dims.topleft.y);
   }
 
-  void splat(glm::vec2 tileCoords, glm::vec4 colour, poplar::Vector<float>& localFb) {
-    // render 10 by 10 square around the point
-    for (auto i = -5; i < 5; i++) {
-      for (auto j = -5; j < 5; j++) {
-        auto newpt = glm::vec2(tileCoords.x + i, tileCoords.y + j);
+  void splat(struct square sq, glm::vec4 colour, poplar::Vector<float>& localFb) {
+    for (auto i = sq.topleft.x; i < sq.bottomright.x; i++) {
+      for (auto j = sq.topleft.y; j < sq.bottomright.y; j++) {
+        auto newpt = glm::vec2(i, j);
+
         auto index = toByteBufferIndex(newpt);
         if (index < localFb.size() && index >= 0 && isWithinTileBounds(newpt)) {
           memcpy(&localFb[index], glm::value_ptr(colour), sizeof(colour));
@@ -130,7 +135,11 @@ public:
       glm::vec2 windowCoords = viewport.clipSpaceToViewport(pt);
       glm::vec2 tileCoords = windowCoordsToTileCoords(windowCoords, dims);
       if (isWithinTileBounds(tileCoords)) {
-        splat(tileCoords, colour, localFb);
+        // keep the center point on this tile
+        auto sq = square(tileCoords);
+        splat(sq, colour, localFb);
+      } else {
+        // determine which neighboring tile the point should be sent to
       }
     }
          
