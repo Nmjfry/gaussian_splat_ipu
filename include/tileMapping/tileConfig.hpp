@@ -7,16 +7,29 @@
 #define IMWIDTH 1280.0f
 #define IMHEIGHT 720.0f
 
+typedef struct {
+  float x;
+  float y;
+  float z;
+  float w;
+} ivec4;
+
+typedef struct {
+  float x;
+  float y;
+} ivec2;
+
+
 struct square {
-  glm::vec4 centre;
-  glm::vec4 colour;
+  ivec4 centre;
+  ivec4 colour;
   glm::vec2 topleft;
   glm::vec2 bottomright;
 
   square(glm::vec2 c) {
     topleft = glm::vec2(c.x - 3, c.y - 3);
     bottomright = glm::vec2(c.x + 3, c.y + 3);
-    centre = glm::vec4(c.x, c.y, 0.0f, 1.0f);
+    centre = {c.x, c.y, 0.0f, 1.0f};
   }
 };
 

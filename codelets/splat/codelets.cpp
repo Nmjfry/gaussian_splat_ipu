@@ -42,9 +42,6 @@ public:
   // poplar::Input<poplar::Vector<float>> southIn;
   // poplar::Output<poplar::Vector<float>> southOut;
 
-  unsigned squaresTaken = 0;
-  unsigned bytesMoved = 0;
-
   int toByteBufferIndex(float x, float y) {
     return int(x + y * TILEWIDTH) * 4;
   } 
@@ -78,6 +75,16 @@ public:
     return dirs;
   }
 
+  void rasterise(square &sq) {
+    // for each pixel in the square, check if it should be rendered in this tile
+    for (auto i = sq.topleft.x; i < sq.bottomright.x; i++) {
+      for (auto j = sq.topleft.y; j < sq.bottomright.y; j++) {
+        auto index = toByteBufferIndex(i, j);
+        memcpy(&localFb[index], &sq.colour, sizeof(sq.colour));
+      }
+    }
+  }
+
   bool compute(unsigned workerId) {
 
     // Transpose because GLM storage order is column major:
@@ -88,6 +95,8 @@ public:
       auto black = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
       memcpy(&localFb[i], glm::value_ptr(black), sizeof(black));
     }
+
+    unsigned squaresSent = 0;
 
     // loop over the vertices originally stored on this tile
     for (auto i = 0; i < vertsIn.size(); i+=4) {
@@ -102,24 +111,54 @@ public:
       // if it needs to be copied to a different tile
       auto dirs = clip(sq);
 
-      // for each pixel in the square, check if it should be rendered in this tile
-      for (auto i = sq.topleft.x; i < sq.bottomright.x; i++) {
-        for (auto j = sq.topleft.y; j < sq.bottomright.y; j++) {
-          auto index = toByteBufferIndex(i, j);
-          auto green = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
-          memcpy(&localFb[index], glm::value_ptr(green), sizeof(green));
-        }
-      }
+      sq.colour = {0.0f, 1.0f, 0.0f, 1.0f};
+      rasterise(sq);
 
       // if the square needs to be copied to another tile, copy it
-      if (dirs.E) {
-
+      if (dirs.E && squaresSent < eastOut.size()) {
+        memcpy(&eastOut[squaresSent], glm::value_ptr(upt), sizeof(upt));
+        float tid_colour = tile_id[0] * (1.0f / 1439.0f);
+        ivec4 colour = {1.0f, 0.0f, tid_colour, 1.0f};
+        memcpy(&eastOut[squaresSent+16], &colour, sizeof(colour));
+        squaresSent+=sizeof(square);
       }
+    }
 
+    unsigned bufferInSize = 200 * sizeof(square);
+    for (auto i = 0; i < bufferInSize; i+=sizeof(square)) {
+      ivec4 iupt;
+      memcpy(&iupt, &westIn[i], sizeof(ivec4));
+      glm::vec4 upt = glm::vec4(iupt.x, iupt.y, iupt.z, iupt.w);
+
+
+      auto pt = m * upt; 
+      auto tileCoords = viewport.clipSpaceToTile(pt);
+
+      ivec4 colour;
+      memcpy(&colour, &westIn[i+16], sizeof(ivec4));
+
+      // give point a square extent
+      auto sq = square(tileCoords);
+
+      // clip the square to the tile, return true 
+      // if it needs to be copied to a different tile
+      auto dirs = clip(sq);
+
+      sq.colour = colour;
+      rasterise(sq);
+
+      // if the square needs to be copied to another tile, copy it
+      if (dirs.E && squaresSent < eastOut.size()) {
+        memcpy(&eastOut[squaresSent], glm::value_ptr(upt), sizeof(upt));
+        ivec4 colour = {1.0f, 0.0f, 0.0f, 1.0f};
+        memcpy(&eastOut[squaresSent+16], &colour, sizeof(colour));
+        squaresSent+=sizeof(square);
+      }
     }
  
     return true;
   }
+ 
 };
 
 
