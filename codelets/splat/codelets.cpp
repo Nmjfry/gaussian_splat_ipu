@@ -27,34 +27,55 @@ class Transform4x4 : public poplar::MultiVertex {
 public:
   poplar::Input<poplar::Vector<float>> matrix;
   poplar::Input<poplar::Vector<float>> vertsIn;
-  poplar::Input<poplar::Vector<int>> tile_id;
-  poplar::Input<poplar::Vector<float>> westIn; 
-  poplar::Output<poplar::Vector<float>> eastOut;
-  // instead of vertsOut we can have a vector of pixels 
-  // corresponding to a pinned section of the framebuffer.
   poplar::Output<poplar::Vector<float>> localFb;
-  // poplar::Vector<float> centres;
+  poplar::Input<poplar::Vector<int>> tile_id;
+
+  poplar::Input<poplar::Vector<float>> westIn; 
+  // poplar::Output<poplar::Vector<float>> westOut;
+
+  // poplar::Input<poplar::Vector<float>> eastIn;
+  poplar::Output<poplar::Vector<float>> eastOut;
+
+  // poplar::Input<poplar::Vector<float>> northIn;
+  // poplar::Output<poplar::Vector<float>> northOut;
+
+  // poplar::Input<poplar::Vector<float>> southIn;
+  // poplar::Output<poplar::Vector<float>> southOut;
+
   unsigned squaresTaken = 0;
   unsigned bytesMoved = 0;
 
-  int toByteBufferIndex(glm::vec2 pt) {
-    return int(pt.x + pt.y * TILEWIDTH) * 4;
+  int toByteBufferIndex(float x, float y) {
+    return int(x + y * TILEWIDTH) * 4;
   } 
 
-  bool clip(square& sq) {
+  typedef struct directions {
+    bool N;
+    bool E;
+    bool S;
+    bool W;
+    static const int NUM_DIRS = 4;
+  } directions;
+
+  directions clip(square& sq) {
+    directions dirs;
     if (sq.topleft.x < 0) {
       sq.topleft.x = 0;
+      dirs.W = true;
     }
     if (sq.topleft.y < 0) {
       sq.topleft.y = 0;
+      dirs.N = true;
     }
     if (sq.bottomright.x >= TILEWIDTH) {
       sq.bottomright.x = TILEWIDTH;
+      dirs.E = true;
     }
     if (sq.bottomright.y >= TILEHEIGHT) {
       sq.bottomright.y = TILEHEIGHT;
+      dirs.S = true;
     }
-    return sq.topleft.x < 0 || sq.topleft.y < 0 || sq.bottomright.x >= TILEWIDTH || sq.bottomright.y >= TILEHEIGHT;
+    return dirs;
   }
 
   bool compute(unsigned workerId) {
@@ -79,31 +100,22 @@ public:
 
       // clip the square to the tile, return true 
       // if it needs to be copied to a different tile
-      bool clipped = clip(sq);
+      auto dirs = clip(sq);
 
       // for each pixel in the square, check if it should be rendered in this tile
       for (auto i = sq.topleft.x; i < sq.bottomright.x; i++) {
         for (auto j = sq.topleft.y; j < sq.bottomright.y; j++) {
-          auto rasterPixel = glm::vec2(i, j);
-          auto index = toByteBufferIndex(rasterPixel);
+          auto index = toByteBufferIndex(i, j);
           auto green = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
           memcpy(&localFb[index], glm::value_ptr(green), sizeof(green));
         }
       }
 
-      if (clipped) {
-
-        
+      // if the square needs to be copied to another tile, copy it
+      if (dirs.E) {
 
       }
 
-
-      // if (rasterPixel.x >= TILEWIDTH && rasterPixel.y >= 0 && rasterPixel.y < TILEHEIGHT && 
-      //         bytesMoved < eastOut.size()) {
-      //       // TODO:
-      //       // If the pixel resides to the right of the tile, the structure (square) needs to be sent to a neighboring tile,
-      //       // since the extent of the square is outside of this tile.
-      //   }
     }
  
     return true;
