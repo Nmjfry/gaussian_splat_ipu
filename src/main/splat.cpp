@@ -7,8 +7,9 @@
 #include <ipu/options.hpp>
 #include <ipu/ipu_utils.hpp>
 #include <ipu/io_utils.hpp>
+#include <tileMapping/tileConfig.hpp>
+#include <splat/camera.hpp>
 
-#include <splat/cpu_rasteriser.hpp>
 #include <splat/ipu_rasteriser.hpp>
 #include <splat/file_io.hpp>
 #include <splat/serialise.hpp>
@@ -32,7 +33,7 @@ void addOptions(boost::program_options::options_description& desc) {
    "Disable use of optimised AMP codelets.");
 }
 
-std::unique_ptr<splat::IpuSplatter> createIpuBuilder(const splat::Points& pts, splat::TiledFramebuffer& fb, bool useAMP) {
+std::unique_ptr<splat::IpuSplatter> createIpuBuilder(const splat::Points& pts, TiledFramebuffer& fb, bool useAMP) {
   using namespace poplar;
 
   ipu_utils::RuntimeConfig defaultConfig {
@@ -80,12 +81,11 @@ int main(int argc, char** argv) {
   // Splat all the points into an OpenCV image:
   auto imagePtr = std::make_unique<cv::Mat>(720, 1280, CV_8UC3);
   auto imagePtrBuffered = std::make_unique<cv::Mat>(imagePtr->rows, imagePtr->cols, CV_8UC3);
-  splat::Viewport viewport(0.f, 0.f, imagePtr->cols, imagePtr->rows);
   const float aspect = imagePtr->cols / (float)imagePtr->rows;
 
 
   // Construct some tiled framebuffer histograms:
-  splat::TiledFramebuffer fb(imagePtr->cols, imagePtr->rows, 32, 20);
+  TiledFramebuffer fb;
   auto pointCounts = std::vector<std::uint32_t>(fb.numTiles, 0u);
 
   auto num_pixels = imagePtr->rows * imagePtr->cols;
@@ -146,10 +146,7 @@ int main(int argc, char** argv) {
     auto startTime = std::chrono::steady_clock::now();
     *imagePtr = 0;
 
-    if (state.device == "cpu") {
-      // pvti::Tracepoint scoped(&traceChannel, "mvp_transform_cpu");
-      // projectPoints(pts, projection, dynamicView, clipSpace);
-    } else if (state.device == "ipu") {
+    if (state.device == "ipu") {
       pvti::Tracepoint scoped(&traceChannel, "mvp_transform_ipu");
       ipuSplatter->updateModelViewProjection(projection * dynamicView);
       gm.execute(*ipuSplatter);
@@ -168,12 +165,10 @@ int main(int argc, char** argv) {
       // Update projection:
       projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
       // Update modelview:
-      
       dynamicView = modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(0.f, 1.f, 0.f));
     } else {
       // Only log these if not in interactive mode:
       ipu_utils::logger()->info("Splat time: {} points/sec: {}", splatTimeSecs, pts.size()/splatTimeSecs);
-      // ipu_utils::logger()->info("Splatted point count: {}", count);
     }
 
   } while (uiServer && state.stop == false);

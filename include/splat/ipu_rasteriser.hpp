@@ -6,7 +6,8 @@
 
 #include <ipu/ipu_utils.hpp>
 #include <glm/mat4x4.hpp>
-#include "cpu_rasteriser.hpp"
+#include <tileMapping/tileConfig.hpp>
+#include <opencv2/imgproc.hpp>
 
 namespace splat {
 
@@ -16,7 +17,7 @@ typedef std::vector<Point3f> Points;
 
 class IpuSplatter : public ipu_utils::BuilderInterface {
 public:
-  IpuSplatter(const Points& pts, splat::TiledFramebuffer& fb, bool noAMP);
+  IpuSplatter(const Points& pts, TiledFramebuffer& fb, bool noAMP);
   virtual ~IpuSplatter() {}
 
   void updateModelViewProjection(const glm::mat4& mvp);

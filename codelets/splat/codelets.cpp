@@ -6,84 +6,13 @@
 
 #include <glm/mat4x4.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include </home/nf20/workspace/gaussian_splat_ipu/include/tileMapping/tileConfig.hpp>
 
 #ifdef __IPU__
 #include <ipu_vector_math>
 #include <ipu_memory_intrinsics>
 #include <ipu_builtins.h>
 #endif
-
-#define TILEHEIGHT 20.0f
-#define TILEWIDTH 32.0f
-#define IMWIDTH 1280.0f
-#define IMHEIGHT 720.0f
-
-struct square {
-  glm::vec4 centre;
-  glm::vec2 topleft;
-  glm::vec2 bottomright;
-  glm::vec4 colour = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
-
-  square(glm::vec2 c) {
-    topleft = glm::vec2(c.x - 5, c.y - 5);
-    bottomright = glm::vec2(c.x + 5, c.y + 5);
-    centre = glm::vec4(c.x, c.y, 0.0f, 1.0f);
-  }
-};
-
-
-struct tileDims {
-  glm::vec2 topleft;
-  glm::vec2 bottomright;
-
-  tileDims(int tid) {
-    auto numBlocksWidth = IMWIDTH / TILEWIDTH;
-    auto div = floor(tid / numBlocksWidth);
-    auto mod = tid - div * numBlocksWidth;
-    topleft.x = int(floor(mod * TILEWIDTH));
-    topleft.y = int(floor(div * TILEHEIGHT));
-    bottomright.x = topleft.x + int(TILEWIDTH);
-    bottomright.y = topleft.y + int(TILEHEIGHT);
-  }
-};
-
-// Object that holds the viewpoint specification and apply
-// various viewport transforms:
-struct Viewport {
-  Viewport(float x, float y, float width, float height, unsigned tid)
-    : spec(x, y, width, height), td(tid) {}
-
-  // Combine perspective division with viewport scaling:
-  glm::vec2 clipSpaceToViewport(glm::vec4 cs) const {
-    glm::vec2 vp(cs.x, cs.y);
-    vp *= .5f / cs.w;
-    vp += .5f;
-    return viewportTransform(vp);
-  }
-
-  // Converts from window coordinates to local tile coordinates:
-  glm::vec2 viewportToTile(glm::vec2 windowCoords, struct tileDims td) const {
-    return glm::vec2(floor(windowCoords.x - td.topleft.x), floor(windowCoords.y - td.topleft.y));
-  }
-
-  // Converts from clip space to tile coordinates:
-  glm::vec2 clipSpaceToTile(glm::vec4 cs) const {
-    glm::vec2 vp = clipSpaceToViewport(cs);
-    return viewportToTile(vp, td);
-  }
-
-  // Converts from normalised screen coords to the specified view window:
-  glm::vec2 viewportTransform(glm::vec2 v) const {
-    v.x *= spec[2];
-    v.y *= spec[3];
-    v.x += spec[0];
-    v.y += spec[1];
-    return v;
-  }
-
-  glm::vec4 spec;
-  struct tileDims td;
-};
 
 // Multi-Vertex to transform every 4x1 vector
 // in an array by the same 4x4 transformation matrix.
@@ -100,85 +29,83 @@ public:
   poplar::Input<poplar::Vector<float>> vertsIn;
   poplar::Input<poplar::Vector<int>> tile_id;
   poplar::Input<poplar::Vector<float>> westIn; 
-  poplar::Input<poplar::Vector<float>> eastOut;
+  poplar::Output<poplar::Vector<float>> eastOut;
   // instead of vertsOut we can have a vector of pixels 
   // corresponding to a pinned section of the framebuffer.
   poplar::Output<poplar::Vector<float>> localFb;
+  // poplar::Vector<float> centres;
+  unsigned squaresTaken = 0;
   unsigned bytesMoved = 0;
-
 
   int toByteBufferIndex(glm::vec2 pt) {
     return int(pt.x + pt.y * TILEWIDTH) * 4;
   } 
 
-  bool isWithinTileBounds(glm::vec4 pt) {
-    return pt.x >= 0 && pt.x < TILEWIDTH && pt.y >= 0 && pt.y < TILEHEIGHT;
-  }
-  bool isWithinTileBounds(glm::vec2 pt) {
-    return pt.x >= 0 && pt.x < TILEWIDTH && pt.y >= 0 && pt.y < TILEHEIGHT;
-  }
-
-  void splat(struct square sq, poplar::Vector<float>& localFb) {
-    for (auto i = sq.topleft.x; i < sq.bottomright.x; i++) {
-      for (auto j = sq.topleft.y; j < sq.bottomright.y; j++) {
-        auto rasterPixel = glm::vec2(i, j);
-        if (!isWithinTileBounds(rasterPixel)) {
-          // the structure (square) needs to be sent to a neighboring tile,
-          // since the extent of the square is outside of this tile.
-          continue;
-        }
-        auto index = toByteBufferIndex(rasterPixel);
-        if (index < localFb.size() && index >= 0) {
-          memcpy(&localFb[index], glm::value_ptr(sq.colour), sizeof(sq.colour));
-        }
-      }
+  bool clip(square& sq) {
+    if (sq.topleft.x < 0) {
+      sq.topleft.x = 0;
     }
-  }
-
-  void rasterise(struct square sq, glm::vec4 unprojectedCentre) {
-    if (isWithinTileBounds(sq.centre)) {
-        // keep the center point on this tile
-        splat(sq, localFb);
-    } else {
-      // determine which neighboring tile the point should be sent to
-      if ((sq.centre.x >= TILEWIDTH || sq.centre.y >= TILEHEIGHT) && bytesMoved < eastOut.size() - sizeof(sq)) {
-        void* ptr = (void*) &eastOut[bytesMoved];
-        memcpy(ptr, glm::value_ptr(unprojectedCentre), sizeof(sq));
-        bytesMoved+=sizeof(sq);
-      }
+    if (sq.topleft.y < 0) {
+      sq.topleft.y = 0;
     }
+    if (sq.bottomright.x >= TILEWIDTH) {
+      sq.bottomright.x = TILEWIDTH;
+    }
+    if (sq.bottomright.y >= TILEHEIGHT) {
+      sq.bottomright.y = TILEHEIGHT;
+    }
+    return sq.topleft.x < 0 || sq.topleft.y < 0 || sq.bottomright.x >= TILEWIDTH || sq.bottomright.y >= TILEHEIGHT;
   }
 
   bool compute(unsigned workerId) {
+
     // Transpose because GLM storage order is column major:
     const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
-    struct Viewport viewport(0.f, 0.f, IMWIDTH, IMHEIGHT, tile_id[0]);
+    TiledFramebuffer viewport(tile_id[0]);
 
     for (auto i = 0; i < localFb.size(); i+=4) {
       auto black = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
       memcpy(&localFb[i], glm::value_ptr(black), sizeof(black));
     }
 
+    // loop over the vertices originally stored on this tile
     for (auto i = 0; i < vertsIn.size(); i+=4) {
       auto upt = glm::make_vec4(&vertsIn[i]);
       auto pt = m * upt; 
-      glm::vec2 tileCoords = viewport.clipSpaceToTile(pt);
-      auto sq = square(tileCoords);
-      rasterise(sq, upt);
-    }
+      auto tileCoords = viewport.clipSpaceToTile(pt);
 
-    for (auto i = 0; i < westIn.size(); i+=sizeof(struct square)) {
-      auto upcentre = glm::make_vec4(&westIn[i]);
-      auto colour = glm::make_vec4(&westIn[i+sizeof(glm::vec4)+sizeof(glm::vec2)+sizeof(glm::vec2)]);
-      auto centre = m * upcentre; 
-      glm::vec2 tileCoords = viewport.clipSpaceToTile(centre);
+      // give point a square extent
       auto sq = square(tileCoords);
-      sq.colour.r = tile_id[0] * (1.0f / 1440);
-      sq.colour.b = 1.0f;
-      sq.colour.g = 0.0f;
-      rasterise(sq, upcentre);
-    }
 
+      // clip the square to the tile, return true 
+      // if it needs to be copied to a different tile
+      bool clipped = clip(sq);
+
+      // for each pixel in the square, check if it should be rendered in this tile
+      for (auto i = sq.topleft.x; i < sq.bottomright.x; i++) {
+        for (auto j = sq.topleft.y; j < sq.bottomright.y; j++) {
+          auto rasterPixel = glm::vec2(i, j);
+          auto index = toByteBufferIndex(rasterPixel);
+          auto green = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
+          memcpy(&localFb[index], glm::value_ptr(green), sizeof(green));
+        }
+      }
+
+      if (clipped) {
+
+        
+
+      }
+
+
+      // if (rasterPixel.x >= TILEWIDTH && rasterPixel.y >= 0 && rasterPixel.y < TILEHEIGHT && 
+      //         bytesMoved < eastOut.size()) {
+      //       // TODO:
+      //       // If the pixel resides to the right of the tile, the structure (square) needs to be sent to a neighboring tile,
+      //       // since the extent of the square is outside of this tile.
+      //   }
+    }
+ 
     return true;
   }
 };

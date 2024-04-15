@@ -5,6 +5,7 @@
 #include <ipu/io_utils.hpp>
 #include <opencv2/highgui.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <tileMapping/tileConfig.hpp>
 
 #include <poputil/TileMapping.hpp>
 
@@ -12,20 +13,7 @@ using namespace poplar;
 
 namespace splat {
 
-struct square {
-  glm::vec4 centre;
-  glm::vec2 topleft;
-  glm::vec2 bottomright;
-  glm::vec4 colour = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
-
-  square(glm::vec2 c) {
-    topleft = glm::vec2(c.x - 5, c.y - 5);
-    bottomright = glm::vec2(c.x + 5, c.y + 5);
-    centre = glm::vec4(c.x, c.y, 0.0f, 1.0f);
-  }
-};
-
-IpuSplatter::IpuSplatter(const Points& verts, splat::TiledFramebuffer& fb, bool noAMP)
+IpuSplatter::IpuSplatter(const Points& verts, TiledFramebuffer& fb, bool noAMP)
   : modelViewProjection("mvp"), inputVertices("verts_in"), outputFramebuffer("frame_buffer"), 
     transformMatrix(16),
     initialised(false),
@@ -33,7 +21,7 @@ IpuSplatter::IpuSplatter(const Points& verts, splat::TiledFramebuffer& fb, bool 
     fbMapping(fb)
 {
   hostVertices.reserve(4 * verts.size());
-  printf("VERTS size: %lu\n", verts.size());
+  printf("VERTS size: %luB\n", verts.size());
   for (const auto& v : verts) {
     hostVertices.push_back(v.p.x);
     hostVertices.push_back(v.p.y);
@@ -47,6 +35,7 @@ IpuSplatter::IpuSplatter(const Points& verts, splat::TiledFramebuffer& fb, bool 
     frameBuffer.push_back(0.0);
     frameBuffer.push_back(0.0);
   }
+  printf("Fb size: %luB\n", frameBuffer.size());
 }
 
 void IpuSplatter::updateModelViewProjection(const glm::mat4& mvp) {
@@ -207,7 +196,8 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   const auto codeletFile = std::string(POPC_PREFIX) + "/codelets/splat/codelets.cpp";
   const auto glmPath = std::string(POPC_PREFIX) + "/external/glm/";
   const auto otherIncludes = std::string(POPC_PREFIX) + "/include/missing";
-  const auto includes = " -I " + glmPath + " -I " + otherIncludes;
+  const auto tileMapping = std::string(POPC_PREFIX) + "/include/tileMapping";
+  const auto includes = " -I " + glmPath + " -I " + otherIncludes + " -I " + tileMapping;
   ipu_utils::logger()->debug("POPC_PREFIX: {}", POPC_PREFIX);
   vg.addCodelets(codeletFile, poplar::CodeletFileType::Auto, "-O3" + includes);
 
@@ -220,11 +210,11 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   program::Sequence broadcastMvp;
   broadcastMvp.add(modelViewProjection.buildWrite(vg, true));
 
-  // Map the point cloud vertices across all tiles. If we are not using AMP the only constraint
+  // Map the point cloud vertices across all tiles. TODO: If we are not using AMP the only constraint
   // is that the grain size must be a multiple of 4 (so that 4-vectors are not split between
   // tiles). If we use the AMP we need to have at least 8 4-vectors to fill the AMP pipeline so
   // the minimum grain size is 32:
-  const auto grainSize = disableAMPVertices ? 4 : 4 * 8;
+  const auto grainSize = 4; //disableAMPVertices ? 4 : 4 * 8;
   auto mapping = calculateMapping(vg, hostVertices.size(), grainSize);
   printf("Vertex layout: %lu, %lu, %lu\n", mapping.padding, mapping.elementsPerTile, mapping.totalTiles);
   auto paddedInput = vg.addVariable(FLOAT, {hostVertices.size() + mapping.padding}, "padded_verts_in");
@@ -295,7 +285,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       auto sliceFb = paddedFramebuffer.slice(mFb.front());
 
       // if (disableAMPVertices) {
-      ipu_utils::logger()->warn("AMP vertex disabled on tile: {}", t);
+      // ipu_utils::logger()->warn("AMP vertex disabled on tile: {}", t);
       addProjectionVertex(vg, projectCs, t, tid, westIn, eastOut, localMvp.flatten(), sliceIn, sliceFb);
       // } else {
         // disabled for now
