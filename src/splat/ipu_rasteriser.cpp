@@ -102,10 +102,16 @@ struct MappingInfo {
   std::size_t totalTiles;
 };
 
-MappingInfo calculateMapping(poplar::Graph& g, std::size_t numElements, std::size_t grainSize) {
-  ipu_utils::logger()->info("Input num elements: {}", numElements);
+MappingInfo calculateMapping(poplar::Graph& g, std::size_t numElements, std::size_t grainSize, TiledFramebuffer &fbMapping) {
+  ipu_utils::logger()->info("Input size of pts: {}B", numElements);
   const double numTiles = g.getTarget().getNumTiles();
-  double grainsPerTile = std::ceil(numElements / (numTiles * grainSize));
+
+  if (numTiles != fbMapping.numTiles) {
+    ipu_utils::logger()->error("Number of tiles in the graph ({}) does not match the number of tiles in the framebuffer mapping ({})", numTiles, fbMapping.numTiles);
+    throw std::runtime_error("Number of tiles in the graph does not match the number of tiles in the framebuffer");
+  }
+
+  double grainsPerTile = std::ceil(numElements / (fbMapping.numTiles * grainSize));
   double elementsPerTile = grainsPerTile * grainSize;
   double fullTiles = std::floor(numElements / elementsPerTile);
   double remainingElements = numElements - (fullTiles * elementsPerTile);
@@ -123,7 +129,12 @@ MappingInfo calculateMapping(poplar::Graph& g, std::size_t numElements, std::siz
 
 MappingInfo calculateFBMapping(poplar::Graph& g, std::size_t numElements, std::size_t grainSize, TiledFramebuffer &fbMapping) {
   const double numTiles = g.getTarget().getNumTiles();
-  auto grainsPerTile = std::ceil(numElements / (numTiles * grainSize));
+  if (numTiles != fbMapping.numTiles) {
+    ipu_utils::logger()->error("Number of tiles in the graph ({}) does not match the number of tiles in the framebuffer mapping ({})", numTiles, fbMapping.numTiles);
+    throw std::runtime_error("Number of tiles in the graph does not match the number of tiles in the framebuffer");
+  }
+
+  auto grainsPerTile = std::ceil(numElements / (fbMapping.numTiles * grainSize));
   auto elementsPerTile = grainsPerTile * grainSize;
   double fullTiles = std::floor(numElements / elementsPerTile);
   fullTiles = fullTiles > 1439 ? 1439 : fullTiles;
@@ -217,7 +228,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   // tiles). If we use the AMP we need to have at least 8 4-vectors to fill the AMP pipeline so
   // the minimum grain size is 32:
   const auto grainSize = 4; //disableAMPVertices ? 4 : 4 * 8;
-  auto mapping = calculateMapping(vg, hostVertices.size(), grainSize);
+  auto mapping = calculateMapping(vg, hostVertices.size(), grainSize, fbMapping);
   printf("Vertex layout: %lu, %lu, %lu\n", mapping.padding, mapping.elementsPerTile, mapping.totalTiles);
   auto paddedInput = vg.addVariable(FLOAT, {hostVertices.size() + mapping.padding}, "padded_verts_in");
   applyTileMapping(vg, paddedInput, mapping);
@@ -225,22 +236,15 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   // We only want to stream to a slice of the padded tensor:
   inputVertices = paddedInput.slice(0, hostVertices.size());
 
-  ipu_utils::logger()->info("Size input: {}", inputVertices.numElements());
-  ipu_utils::logger()->info("Size of padded input: {}", paddedInput.numElements());
-
-  printf("input sizes - points:%lu, framebuffer:%lu\n", hostVertices.size(), frameBuffer.size());
-
   auto fbGrainSize = 4;
-  auto framebufferMapping = calculateFBMapping(vg, frameBuffer.size(), fbGrainSize, fbMapping);
-  printf("Framebuffer layout: %lu, %lu, %lu\n", framebufferMapping.padding, framebufferMapping.elementsPerTile, framebufferMapping.totalTiles);
-  auto paddedFramebuffer = vg.addVariable(FLOAT, {frameBuffer.size() + framebufferMapping.padding}, "padded_frame_buffer");
-  printf("mapping: %lu, %lu, %lu\n", framebufferMapping.padding, framebufferMapping.elementsPerTile, framebufferMapping.totalTiles);
-  applyTileMapping(vg, paddedFramebuffer, framebufferMapping);
+  auto fbToTileMapping = calculateFBMapping(vg, frameBuffer.size(), fbGrainSize, fbMapping);
+  printf("Framebuffer layout: %lu, %lu, %lu\n", fbToTileMapping.padding, fbToTileMapping.elementsPerTile, fbToTileMapping.totalTiles);
+  auto paddedFramebuffer = vg.addVariable(FLOAT, {frameBuffer.size() + fbToTileMapping.padding}, "padded_frame_buffer");
+  applyTileMapping(vg, paddedFramebuffer, fbToTileMapping);
   outputFramebuffer = paddedFramebuffer.slice(0, frameBuffer.size());
 
   // this program sequence will copy the points between all the tiles in the graph
   program::Sequence broadcastPoints;
-
 
   // Build a compute set to transform the points:
   const auto csName = disableAMPVertices ? "project" : "project_amp";
@@ -249,17 +253,10 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   // Get the tile mapping and connect the vertices:
   const auto tm = vg.getTileMapping(paddedInput);
 
-  
-  const auto tmFb = vg.getTileMapping(paddedFramebuffer);
-
-  uint64 sizeof_square = sizeof(struct square);
-  uint64 numSparePoints = 200;
-  auto eastOut = vg.addVariable(FLOAT, {numSparePoints * sizeof_square}, "points_to_east");
-  vg.setTileMapping(eastOut, 0u);
+  std::vector<poplar::VertexRef> verts;
 
   for (auto t = 0u; t < tm.size(); ++t) {
     const auto& m = tm[t];
-    const auto& mFb = tmFb[t];
     if (m.size() > 1u) {
       throw std::runtime_error("Expected vertices to be stored as a single contiguous region per tile.");
     }
@@ -268,6 +265,44 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       auto localMvp = vg.clone(modelViewProjection, "mvp_tile_" + std::to_string(t));
       vg.setTileMapping(localMvp, t);
       broadcastMvp.add(program::Copy(modelViewProjection, localMvp));
+
+      Tensor tid = vg.addConstant<int>(INT, {1}, {int(t)});
+      vg.setTileMapping(tid, t);
+
+      auto sliceIn  = paddedInput.slice(m.front());
+
+      auto v = vg.addVertex(projectCs, "Transform4x4");
+      vg.setTileMapping(v, t);
+
+      vg.connect(v["matrix"], localMvp.flatten());
+      vg.connect(v["vertsIn"], sliceIn);
+      vg.connect(v["tile_id"], tid);
+ 
+      verts.push_back(v);
+    }
+  }
+
+  const auto tmFb = vg.getTileMapping(paddedFramebuffer);
+  uint64 sizeof_square = sizeof(struct square);
+  uint64 numSparePoints = 200;
+  auto eastOut = vg.addVariable(FLOAT, {numSparePoints * sizeof_square}, "points_to_east");
+  vg.setTileMapping(eastOut, 0u);
+
+  for (auto t = 0u; t < tmFb.size(); ++t) {
+    const auto& mFb = tmFb[t];
+
+    if (mFb.size() > 1u) {
+      throw std::runtime_error("Expected fb to be stored as a single contiguous region per tile.");
+    }
+
+    if (tmFb.size() != tm.size()) {
+      printf("Expected %lu, got %lu\n", tm.size(), tmFb.size());
+      throw std::runtime_error("Expected vertices to be mapped to the same number of tiles as the framebuffer.");
+    }
+
+    if (mFb.size() > 0u && t < verts.size()) {
+      auto sliceFb = paddedFramebuffer.slice(mFb.front());
+      auto v = verts[t];
 
       // each tile will write misplaced points to 4 vectors depending on the final destination 
       // at exchange, the four vectors are copied to the neighbouring tiles 
@@ -278,19 +313,9 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       vg.setTileMapping(westIn, nextTile);
       broadcastPoints.add(program::Copy(eastOut, westIn));
 
-      Tensor tid = vg.addConstant<int>(INT, {1}, {int(t)});
-      vg.setTileMapping(tid, t);
-
-      auto sliceIn  = paddedInput.slice(m.front());
-      auto sliceFb = paddedFramebuffer.slice(mFb.front());
-
-      // if (disableAMPVertices) {
-      // ipu_utils::logger()->warn("AMP vertex disabled on tile: {}", t);
-      addProjectionVertex(vg, projectCs, t, tid, westIn, eastOut, localMvp.flatten(), sliceIn, sliceFb);
-      // } else {
-        // disabled for now
-      //   addProjectionVertexAMP(vg, projectCs, t, localMvp.flatten(), sliceIn, sliceFb);
-      // }
+      vg.connect(v["localFb"], sliceFb);
+      vg.connect(v["westIn"], westIn);
+      vg.connect(v["eastOut"], eastOut);
 
       if (nextTile < 1439) {
         auto eastOutNext = vg.addVariable(FLOAT, {numSparePoints * sizeof_square}, "points_to_east");
