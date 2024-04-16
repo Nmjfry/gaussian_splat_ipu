@@ -117,7 +117,7 @@ public:
       // if the square needs to be copied to another tile, copy it
       if (dirs.E && squaresSent < eastOut.size()) {
         memcpy(&eastOut[squaresSent], glm::value_ptr(upt), sizeof(upt));
-        float tid_colour = tile_id[0] * (1.0f / 1439.0f);
+        float tid_colour = tile_id[0] * (1.0f / viewport.numTiles);
         ivec4 colour = {1.0f, 0.0f, tid_colour, 1.0f};
         memcpy(&eastOut[squaresSent+16], &colour, sizeof(colour));
         squaresSent+=sizeof(square);
