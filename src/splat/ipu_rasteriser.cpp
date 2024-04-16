@@ -106,10 +106,7 @@ MappingInfo calculateMapping(poplar::Graph& g, std::size_t numElements, std::siz
   ipu_utils::logger()->info("Input size of pts: {}B", numElements);
   const double numTiles = g.getTarget().getNumTiles();
 
-  if (numTiles != fbMapping.numTiles) {
-    ipu_utils::logger()->error("Number of tiles in the graph ({}) does not match the number of tiles in the framebuffer mapping ({})", numTiles, fbMapping.numTiles);
-    throw std::runtime_error("Number of tiles in the graph does not match the number of tiles in the framebuffer");
-  }
+  ipu_utils::logger()->info("Tiles on target ({}) are underutilised. Using {} tiles in the framebuffer mapping", numTiles, fbMapping.numTiles);
 
   double grainsPerTile = std::ceil(numElements / (fbMapping.numTiles * grainSize));
   double elementsPerTile = grainsPerTile * grainSize;
@@ -129,11 +126,9 @@ MappingInfo calculateMapping(poplar::Graph& g, std::size_t numElements, std::siz
 
 MappingInfo calculateFBMapping(poplar::Graph& g, std::size_t numElements, std::size_t grainSize, TiledFramebuffer &fbMapping) {
   const double numTiles = g.getTarget().getNumTiles();
-  if (numTiles != fbMapping.numTiles) {
-    ipu_utils::logger()->error("Number of tiles in the graph ({}) does not match the number of tiles in the framebuffer mapping ({})", numTiles, fbMapping.numTiles);
-    throw std::runtime_error("Number of tiles in the graph does not match the number of tiles in the framebuffer");
-  }
 
+  ipu_utils::logger()->info("Tiles on target ({}) are underutilised. Using {} tiles in the framebuffer mapping", numTiles, fbMapping.numTiles);
+  
   auto grainsPerTile = std::ceil(numElements / (fbMapping.numTiles * grainSize));
   auto elementsPerTile = grainsPerTile * grainSize;
   double fullTiles = std::floor(numElements / elementsPerTile);
