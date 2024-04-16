@@ -2,8 +2,8 @@
 
 #include <glm/glm.hpp>
 
-#define TILEHEIGHT 20
-#define TILEWIDTH 32
+#define TILEHEIGHT 20.0f
+#define TILEWIDTH 32.0f
 #define IMWIDTH 1280.0f
 #define IMHEIGHT 720.0f
 
@@ -19,7 +19,6 @@ typedef struct {
   float y;
 } ivec2;
 
-
 struct square {
   ivec4 centre;
   ivec4 colour;
@@ -27,8 +26,8 @@ struct square {
   glm::vec2 bottomright;
 
   square(glm::vec2 c) {
-    topleft = glm::vec2(c.x - 3, c.y - 3);
-    bottomright = glm::vec2(c.x + 3, c.y + 3);
+    topleft = glm::vec2(c.x - 5, c.y - 5);
+    bottomright = glm::vec2(c.x + 5, c.y + 5);
     centre = {c.x, c.y, 0.0f, 1.0f};
   }
 };

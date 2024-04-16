@@ -29,7 +29,7 @@ void addOptions(boost::program_options::options_description& desc) {
   ("ui-port", po::value<int>()->default_value(0), "Start a remote user-interface server on the specified port.")
   ("device", po::value<std::string>()->default_value("cpu"),
    "Choose the render device")
-  ("no-amp", po::bool_switch()->default_value(false),
+  ("no-amp", po::bool_switch()->default_value(true),
    "Disable use of optimised AMP codelets.");
 }
 

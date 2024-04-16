@@ -125,7 +125,8 @@ public:
     }
 
     unsigned bufferInSize = 200 * sizeof(square);
-    for (auto i = 0; i < bufferInSize; i+=sizeof(square)) {
+    auto i = 0;
+    for (; i < bufferInSize; i+=sizeof(square)) {
       ivec4 iupt;
       memcpy(&iupt, &westIn[i], sizeof(ivec4));
       glm::vec4 upt = glm::vec4(iupt.x, iupt.y, iupt.z, iupt.w);
@@ -147,13 +148,13 @@ public:
       sq.colour = colour;
       rasterise(sq);
 
-      // if the square needs to be copied to another tile, copy it
-      if (dirs.E && squaresSent < eastOut.size()) {
-        memcpy(&eastOut[squaresSent], glm::value_ptr(upt), sizeof(upt));
-        ivec4 colour = {1.0f, 0.0f, 0.0f, 1.0f};
-        memcpy(&eastOut[squaresSent+16], &colour, sizeof(colour));
-        squaresSent+=sizeof(square);
-      }
+      // // if the square needs to be copied to another tile, copy it
+      // if (dirs.E && squaresSent < eastOut.size()) {
+      //   memcpy(&eastOut[squaresSent], glm::value_ptr(upt), sizeof(upt));
+      //   ivec4 colour = {1.0f, 0.0f, 0.0f, 1.0f};
+      //   memcpy(&eastOut[squaresSent+16], &colour, sizeof(colour));
+      //   squaresSent+=sizeof(square);
+      // }
     }
  
     return true;

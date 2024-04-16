@@ -77,7 +77,7 @@ void IpuSplatter::getFrameBuffer(cv::Mat &frame) const {
   cv::min(image_f * 255.0f, 255.0f, image_f);
   image_f.convertTo(image_f_8u, CV_8UC4);
   cvtColor(image_f_8u, frame, cv::COLOR_RGBA2BGR);
-  frame = tileImageBuffer(frame, 20, 32, CV_8UC3, 3);
+  frame = tileImageBuffer(frame, fbMapping.tileHeight, fbMapping.tileWidth, CV_8UC3, 3);
 
   cv::imwrite("f.png", frame);
 
@@ -121,10 +121,14 @@ MappingInfo calculateMapping(poplar::Graph& g, std::size_t numElements, std::siz
   return MappingInfo{padding, std::size_t(elementsPerTile), std::size_t(fullTiles)};
 }
 
-MappingInfo calculateFBMapping(std::size_t numElements, std::size_t grainSize, MappingInfo &pts_mapping) {
-  auto grainsPerTile = std::ceil(numElements / (pts_mapping.totalTiles * grainSize));
+MappingInfo calculateFBMapping(poplar::Graph& g, std::size_t numElements, std::size_t grainSize, TiledFramebuffer &fbMapping) {
+  const double numTiles = g.getTarget().getNumTiles();
+  auto grainsPerTile = std::ceil(numElements / (numTiles * grainSize));
   auto elementsPerTile = grainsPerTile * grainSize;
-  auto remainingElements = numElements - (pts_mapping.totalTiles * elementsPerTile);
+  double fullTiles = std::floor(numElements / elementsPerTile);
+  fullTiles = fullTiles > 1439 ? 1439 : fullTiles;
+
+  auto remainingElements = numElements - (fullTiles * elementsPerTile);
   auto paddedRemainder = std::ceil(remainingElements / grainSize) * grainSize;
 
   ipu_utils::logger()->info("Upper bound elements per tile: {}", elementsPerTile);
@@ -132,10 +136,8 @@ MappingInfo calculateFBMapping(std::size_t numElements, std::size_t grainSize, M
   ipu_utils::logger()->info("Padded elements on last tile: {}", paddedRemainder);
   ipu_utils::logger()->info("Padding: {}", paddedRemainder - remainingElements);
 
-
-
   const std::size_t padding = paddedRemainder - remainingElements;
-  return MappingInfo{padding, std::size_t(elementsPerTile), std::size_t(pts_mapping.totalTiles)};
+  return MappingInfo{padding, std::size_t(elementsPerTile), std::size_t(fullTiles)};
 }
 
 /// Distribute elements across tiles such that the number of elements on a
@@ -229,19 +231,15 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   printf("input sizes - points:%lu, framebuffer:%lu\n", hostVertices.size(), frameBuffer.size());
 
   auto fbGrainSize = 4;
-  auto framebufferMapping = calculateFBMapping(frameBuffer.size(), fbGrainSize, mapping);
+  auto framebufferMapping = calculateFBMapping(vg, frameBuffer.size(), fbGrainSize, fbMapping);
   printf("Framebuffer layout: %lu, %lu, %lu\n", framebufferMapping.padding, framebufferMapping.elementsPerTile, framebufferMapping.totalTiles);
   auto paddedFramebuffer = vg.addVariable(FLOAT, {frameBuffer.size() + framebufferMapping.padding}, "padded_frame_buffer");
   printf("mapping: %lu, %lu, %lu\n", framebufferMapping.padding, framebufferMapping.elementsPerTile, framebufferMapping.totalTiles);
   applyTileMapping(vg, paddedFramebuffer, framebufferMapping);
   outputFramebuffer = paddedFramebuffer.slice(0, frameBuffer.size());
 
-
-
-  
   // this program sequence will copy the points between all the tiles in the graph
   program::Sequence broadcastPoints;
-
 
 
   // Build a compute set to transform the points:
@@ -250,6 +248,8 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
   // Get the tile mapping and connect the vertices:
   const auto tm = vg.getTileMapping(paddedInput);
+
+  
   const auto tmFb = vg.getTileMapping(paddedFramebuffer);
 
   uint64 sizeof_square = sizeof(struct square);
