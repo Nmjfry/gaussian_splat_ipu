@@ -5,7 +5,6 @@
 #include <ipu/io_utils.hpp>
 #include <opencv2/highgui.hpp>
 #include <glm/gtc/type_ptr.hpp>
-#include <tileMapping/tileConfig.hpp>
 
 #include <poputil/TileMapping.hpp>
 

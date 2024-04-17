@@ -17,7 +17,7 @@ void projectPoints(const splat::Points& in, const glm::mat4& projection, const g
 
 std::uint32_t splatPoints(cv::Mat& image,
                           const std::vector<glm::vec4>& clipCoords,
-                          const splat::Viewport& viewport,
+                          TiledFramebuffer& fb,
                           std::uint8_t value) {
   std::uint32_t count = 0u;
   const auto colour = cv::Vec3b(value, value, value);
@@ -25,7 +25,7 @@ std::uint32_t splatPoints(cv::Mat& image,
   #pragma omp parallel for schedule(static, 128) num_threads(32)
   for (auto i = 0u; i < clipCoords.size(); ++i) {
     // Convert from clip-space to pixel coords:
-    glm::vec2 windowCoords = viewport.clipSpaceToViewport(clipCoords[i]);
+    glm::vec2 windowCoords = fb.clipSpaceToViewport(clipCoords[i]);
     std::uint32_t r = windowCoords.y;
     std::uint32_t c = windowCoords.x;
 
@@ -42,9 +42,8 @@ std::uint32_t splatPoints(cv::Mat& image,
 }
 
 void buildTileHistogram(std::vector<std::uint32_t>& counts,
-                        const TiledFramebuffer& fb,
                         const std::vector<glm::vec4>& clipCoords,
-                        const splat::Viewport& viewport,
+                        TiledFramebuffer& fb,
                         std::uint8_t value) {
   std::uint32_t count = 0u;
   const auto colour = cv::Vec3b(value, value, value);
@@ -57,7 +56,7 @@ void buildTileHistogram(std::vector<std::uint32_t>& counts,
   #pragma omp parallel for schedule(static, 128) num_threads(32)
   for (auto& cs : clipCoords) {
     // Convert from clip-space to pixel coords:
-    glm::vec2 windowCoords = viewport.clipSpaceToViewport(cs);
+    glm::vec2 windowCoords = fb.clipSpaceToViewport(cs);
     std::uint32_t r = windowCoords.y;
     std::uint32_t c = windowCoords.x;
 

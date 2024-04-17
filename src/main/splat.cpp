@@ -7,9 +7,9 @@
 #include <ipu/options.hpp>
 #include <ipu/ipu_utils.hpp>
 #include <ipu/io_utils.hpp>
-#include <tileMapping/tileConfig.hpp>
 #include <splat/camera.hpp>
 
+#include <splat/cpu_rasteriser.hpp>
 #include <splat/ipu_rasteriser.hpp>
 #include <splat/file_io.hpp>
 #include <splat/serialise.hpp>
@@ -131,6 +131,10 @@ int main(int argc, char** argv) {
   ipuSplatter->updateModelViewProjection(modelView * projection);
   gm.prepareEngine();
 
+  std::vector<glm::vec4> clipSpace;
+  clipSpace.reserve(pts.size());
+
+
   // Video is encoded and sent in a separate thread:
   AsyncTask hostProcessing;
   auto uiUpdateFunc = [&]() {
@@ -139,14 +143,26 @@ int main(int argc, char** argv) {
       uiServer->sendHistogram(pointCounts);
       uiServer->sendPreviewImage(*imagePtrBuffered);
     }
+    {
+      pvti::Tracepoint scope(&traceChannel, "build_histogram");
+      splat::buildTileHistogram(pointCounts, clipSpace, fb);
+    }
   };
 
   auto dynamicView = modelView;
   do {
     auto startTime = std::chrono::steady_clock::now();
     *imagePtr = 0;
+    std::uint32_t count = 0u;
 
-    if (state.device == "ipu") {
+    if (state.device == "cpu") {
+      pvti::Tracepoint scoped(&traceChannel, "mvp_transform_cpu");
+      projectPoints(pts, projection, dynamicView, clipSpace);
+      {
+        pvti::Tracepoint scope(&traceChannel, "splatting_cpu");
+        count = splat::splatPoints(*imagePtr, clipSpace, fb);
+      }
+    } else if (state.device == "ipu") {
       pvti::Tracepoint scoped(&traceChannel, "mvp_transform_ipu");
       ipuSplatter->updateModelViewProjection(projection * dynamicView);
       gm.execute(*ipuSplatter);
@@ -169,6 +185,7 @@ int main(int argc, char** argv) {
     } else {
       // Only log these if not in interactive mode:
       ipu_utils::logger()->info("Splat time: {} points/sec: {}", splatTimeSecs, pts.size()/splatTimeSecs);
+      ipu_utils::logger()->info("Splatted point count: {}", count);
     }
 
   } while (uiServer && state.stop == false);

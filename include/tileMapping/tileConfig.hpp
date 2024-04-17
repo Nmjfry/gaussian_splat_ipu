@@ -32,7 +32,9 @@ struct square {
   }
 };
 
-struct TiledFramebuffer {
+class TiledFramebuffer {
+public:
+
   TiledFramebuffer()
   : // TODO: template this on the image size and tile size
     width(IMWIDTH), height(IMHEIGHT),
@@ -48,7 +50,6 @@ struct TiledFramebuffer {
   TiledFramebuffer(unsigned tid) : TiledFramebuffer() {
     tileToPixCoord(tid);
   }
-
   float pixCoordToTile(float row, float col) const {
     float r = std::nearbyint(row);
     float c = std::nearbyint(col);
