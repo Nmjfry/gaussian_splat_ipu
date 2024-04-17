@@ -106,13 +106,17 @@ MappingInfo calculateMapping(poplar::Graph& g, std::size_t numElements, std::siz
   ipu_utils::logger()->info("Input size of pts: {}B", numElements);
   const double numTiles = g.getTarget().getNumTiles();
 
-  ipu_utils::logger()->info("Tiles on target ({}) are underutilised. Using {} tiles in the framebuffer mapping", numTiles, fbMapping.numTiles);
+  if (fbMapping.numTiles < numTiles) {
+    ipu_utils::logger()->info("Number of tiles in framebuffer ({}) is less than number of tiles on target ({})", fbMapping.numTiles, numTiles);
+  }
 
   double grainsPerTile = std::ceil(numElements / (fbMapping.numTiles * grainSize));
   double elementsPerTile = grainsPerTile * grainSize;
   double fullTiles = std::floor(numElements / elementsPerTile);
   double remainingElements = numElements - (fullTiles * elementsPerTile);
   double paddedRemainder = std::ceil(remainingElements / grainSize) * grainSize;
+
+  fullTiles = fullTiles > 1439 ? 1439 : fullTiles;
 
   ipu_utils::logger()->info("Upper bound elements per tile: {}", elementsPerTile);
   ipu_utils::logger()->info("Full tiles: {}", fullTiles);
@@ -124,27 +128,6 @@ MappingInfo calculateMapping(poplar::Graph& g, std::size_t numElements, std::siz
   return MappingInfo{padding, std::size_t(elementsPerTile), std::size_t(fullTiles)};
 }
 
-MappingInfo calculateFBMapping(poplar::Graph& g, std::size_t numElements, std::size_t grainSize, TiledFramebuffer &fbMapping) {
-  const double numTiles = g.getTarget().getNumTiles();
-
-  ipu_utils::logger()->info("Tiles on target ({}) are underutilised. Using {} tiles in the framebuffer mapping", numTiles, fbMapping.numTiles);
-  
-  auto grainsPerTile = std::ceil(numElements / (fbMapping.numTiles * grainSize));
-  auto elementsPerTile = grainsPerTile * grainSize;
-  double fullTiles = std::floor(numElements / elementsPerTile);
-  fullTiles = fullTiles > 1439 ? 1439 : fullTiles;
-
-  auto remainingElements = numElements - (fullTiles * elementsPerTile);
-  auto paddedRemainder = std::ceil(remainingElements / grainSize) * grainSize;
-
-  ipu_utils::logger()->info("Upper bound elements per tile: {}", elementsPerTile);
-  ipu_utils::logger()->info("Remaining elements: {}", remainingElements);
-  ipu_utils::logger()->info("Padded elements on last tile: {}", paddedRemainder);
-  ipu_utils::logger()->info("Padding: {}", paddedRemainder - remainingElements);
-
-  const std::size_t padding = paddedRemainder - remainingElements;
-  return MappingInfo{padding, std::size_t(elementsPerTile), std::size_t(fullTiles)};
-}
 
 /// Distribute elements across tiles such that the number of elements on a
 /// tile is always divisible by grainSize. The tensor must have already been padded
@@ -232,10 +215,11 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   inputVertices = paddedInput.slice(0, hostVertices.size());
 
   auto fbGrainSize = 4;
-  auto fbToTileMapping = calculateFBMapping(vg, frameBuffer.size(), fbGrainSize, fbMapping);
+  auto fbToTileMapping = calculateMapping(vg, frameBuffer.size(), fbGrainSize, fbMapping);
   printf("Framebuffer layout: %lu, %lu, %lu\n", fbToTileMapping.padding, fbToTileMapping.elementsPerTile, fbToTileMapping.totalTiles);
   auto paddedFramebuffer = vg.addVariable(FLOAT, {frameBuffer.size() + fbToTileMapping.padding}, "padded_frame_buffer");
   applyTileMapping(vg, paddedFramebuffer, fbToTileMapping);
+  
   outputFramebuffer = paddedFramebuffer.slice(0, frameBuffer.size());
 
   // this program sequence will copy the points between all the tiles in the graph
