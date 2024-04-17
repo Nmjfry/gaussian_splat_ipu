@@ -46,35 +46,7 @@ public:
     return int(x + y * TILEWIDTH) * 4;
   } 
 
-  typedef struct directions {
-    bool N;
-    bool E;
-    bool S;
-    bool W;
-    static const int NUM_DIRS = 4;
-  } directions;
-
-  directions clip(square& sq) {
-    directions dirs;
-    if (sq.topleft.x < 0) {
-      sq.topleft.x = 0;
-      dirs.W = true;
-    }
-    if (sq.topleft.y < 0) {
-      sq.topleft.y = 0;
-      dirs.N = true;
-    }
-    if (sq.bottomright.x >= TILEWIDTH) {
-      sq.bottomright.x = TILEWIDTH;
-      dirs.E = true;
-    }
-    if (sq.bottomright.y >= TILEHEIGHT) {
-      sq.bottomright.y = TILEHEIGHT;
-      dirs.S = true;
-    }
-    return dirs;
-  }
-
+  
   void rasterise(square &sq) {
     // for each pixel in the square, check if it should be rendered in this tile
     for (auto i = sq.topleft.x; i < sq.bottomright.x; i++) {
@@ -89,7 +61,7 @@ public:
 
     // Transpose because GLM storage order is column major:
     const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
-    TiledFramebuffer viewport(tile_id[0]);
+    TiledFramebuffer viewport;
 
     for (auto i = 0; i < localFb.size(); i+=4) {
       auto black = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -102,14 +74,14 @@ public:
     for (auto i = 0; i < vertsIn.size(); i+=4) {
       auto upt = glm::make_vec4(&vertsIn[i]);
       auto pt = m * upt; 
-      auto tileCoords = viewport.clipSpaceToTile(pt);
+      auto tileCoords = viewport.clipSpaceToTile(pt, tile_id[0]);
 
       // give point a square extent
       auto sq = square(tileCoords);
 
       // clip the square to the tile, return true 
       // if it needs to be copied to a different tile
-      auto dirs = clip(sq);
+      auto dirs = sq.clip();
 
       sq.colour = {0.0f, 1.0f, 0.0f, 1.0f};
       rasterise(sq);
@@ -133,7 +105,7 @@ public:
 
 
       auto pt = m * upt; 
-      auto tileCoords = viewport.clipSpaceToTile(pt);
+      auto tileCoords = viewport.clipSpaceToTile(pt, tile_id[0]);
 
       ivec4 colour;
       memcpy(&colour, &westIn[i+16], sizeof(ivec4));
@@ -143,7 +115,7 @@ public:
 
       // clip the square to the tile, return true 
       // if it needs to be copied to a different tile
-      auto dirs = clip(sq);
+      auto dirs = sq.clip();
 
       sq.colour = colour;
       rasterise(sq);

@@ -22,19 +22,26 @@ std::uint32_t splatPoints(cv::Mat& image,
   std::uint32_t count = 0u;
   const auto colour = cv::Vec3b(value, value, value);
 
+  auto numPtsOnTile = clipCoords.size() / fb.numTiles;
   #pragma omp parallel for schedule(static, 128) num_threads(32)
-  for (auto i = 0u; i < clipCoords.size(); ++i) {
-    // Convert from clip-space to pixel coords:
-    glm::vec2 windowCoords = fb.clipSpaceToViewport(clipCoords[i]);
-    std::uint32_t r = windowCoords.y;
-    std::uint32_t c = windowCoords.x;
+  for (auto t = 0u; t < fb.numTiles; ++t) {
+    auto [tl, br] = fb.getTileBounds(t);
+    auto bufferStrip = std::vector<glm::vec4>(clipCoords.begin() + t * numPtsOnTile,
+                                               clipCoords.begin() + (t + 1) * numPtsOnTile);
+    for (auto i = 0u; i < bufferStrip.size(); ++i) {
+      // Convert from clip-space to pixel coords:
+      glm::vec2 tileCoords = fb.clipSpaceToTile(bufferStrip[i], t);
+      auto sq = square(tileCoords);
+      auto dirs = sq.clip();
 
-    // Clip points to the image and splat:
-    if (r < image.rows && c < image.cols) {
-      image.at<cv::Vec3b>(r, c) += colour;
-
-      #pragma omp atomic update
-      count += 1;
+      // Clip points to the image and splat:
+      for (std::uint32_t i = sq.topleft.x; i < sq.bottomright.x; i++) {
+        for (std::uint32_t j = sq.topleft.y; j < sq.bottomright.y; j++) {
+          #pragma omp atomic update
+          image.at<cv::Vec3b>(j + tl.y, i + tl.x) += colour;
+          count += 1;
+        }
+      }
     }
   }
 
