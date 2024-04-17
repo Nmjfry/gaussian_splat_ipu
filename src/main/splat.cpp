@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
 
 
   // Construct some tiled framebuffer histograms:
-  TiledFramebuffer fb;
+  TiledFramebuffer fb(imagePtr->cols, imagePtr->rows, IPU_TILEWIDTH, IPU_TILEHEIGHT);
   auto pointCounts = std::vector<std::uint32_t>(fb.numTiles, 0u);
 
   auto num_pixels = imagePtr->rows * imagePtr->cols;
@@ -133,6 +133,7 @@ int main(int argc, char** argv) {
 
   std::vector<glm::vec4> clipSpace;
   clipSpace.reserve(pts.size());
+  TiledFramebuffer cpuFb(CPU_TILEWIDTH, CPU_TILEHEIGHT);
 
 
   // Video is encoded and sent in a separate thread:
@@ -145,7 +146,7 @@ int main(int argc, char** argv) {
     }
     {
       pvti::Tracepoint scope(&traceChannel, "build_histogram");
-      splat::buildTileHistogram(pointCounts, clipSpace, fb);
+      splat::buildTileHistogram(pointCounts, clipSpace, cpuFb);
     }
   };
 
@@ -160,7 +161,7 @@ int main(int argc, char** argv) {
       projectPoints(pts, projection, dynamicView, clipSpace);
       {
         pvti::Tracepoint scope(&traceChannel, "splatting_cpu");
-        count = splat::splatPoints(*imagePtr, clipSpace, fb);
+        count = splat::splatPoints(*imagePtr, clipSpace, cpuFb);
       }
     } else if (state.device == "ipu") {
       pvti::Tracepoint scoped(&traceChannel, "mvp_transform_ipu");

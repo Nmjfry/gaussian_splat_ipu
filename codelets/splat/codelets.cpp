@@ -43,7 +43,7 @@ public:
   // poplar::Output<poplar::Vector<float>> southOut;
 
   int toByteBufferIndex(float x, float y) {
-    return int(x + y * TILEWIDTH) * 4;
+    return int(x + y * IPU_TILEWIDTH) * 4;
   } 
 
   
@@ -61,7 +61,7 @@ public:
 
     // Transpose because GLM storage order is column major:
     const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
-    TiledFramebuffer viewport;
+    TiledFramebuffer viewport(IMWIDTH, IMHEIGHT, IPU_TILEWIDTH, IPU_TILEHEIGHT);
 
     for (auto i = 0; i < localFb.size(); i+=4) {
       auto black = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -81,7 +81,7 @@ public:
 
       // clip the square to the tile, return true 
       // if it needs to be copied to a different tile
-      auto dirs = sq.clip();
+      auto dirs = sq.clip(viewport);
 
       sq.colour = {0.0f, 1.0f, 0.0f, 1.0f};
       rasterise(sq);
@@ -115,7 +115,7 @@ public:
 
       // clip the square to the tile, return true 
       // if it needs to be copied to a different tile
-      auto dirs = sq.clip();
+      auto dirs = sq.clip(viewport);
 
       sq.colour = colour;
       rasterise(sq);

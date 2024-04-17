@@ -2,8 +2,10 @@
 
 #include <glm/glm.hpp>
 
-#define TILEHEIGHT 90.0f
-#define TILEWIDTH 160.0f
+#define CPU_TILEHEIGHT 720.0f
+#define CPU_TILEWIDTH 640.0f
+#define IPU_TILEHEIGHT 20.0f
+#define IPU_TILEWIDTH 32.0f
 #define IMWIDTH 1280.0f
 #define IMHEIGHT 720.0f
 
@@ -28,50 +30,29 @@ typedef struct directions {
 } directions;
 
 
-struct square {
-  ivec4 centre;
-  ivec4 colour;
-  glm::vec2 topleft;
-  glm::vec2 bottomright;
 
-  square(glm::vec2 c) {
-    topleft = glm::vec2(c.x - 5, c.y - 5);
-    bottomright = glm::vec2(c.x + 5, c.y + 5);
-    centre = {c.x, c.y, 0.0f, 1.0f};
-  }
-
-  directions clip() {
-    directions dirs;
-    if (topleft.x < 0) {
-      topleft.x = 0;
-      dirs.W = true;
-    }
-    if (topleft.y < 0) {
-      topleft.y = 0;
-      dirs.N = true;
-    }
-    if (bottomright.x >= TILEWIDTH) {
-      bottomright.x = TILEWIDTH;
-      dirs.E = true;
-    }
-    if (bottomright.y >= TILEHEIGHT) {
-      bottomright.y = TILEHEIGHT;
-      dirs.S = true;
-    }
-    return dirs;
-  }
-};
 
 class TiledFramebuffer {
 public:
 
-  TiledFramebuffer()
+  TiledFramebuffer(std::uint16_t tw, std::uint16_t th)
   : // TODO: template this on the image size and tile size
     width(IMWIDTH), height(IMHEIGHT),
-    tileWidth(TILEWIDTH), tileHeight(TILEHEIGHT), 
+    tileWidth(tw), tileHeight(th), 
     // for now just assume the tile holds the whole image
     spec(0.f, 0.f, IMWIDTH, IMHEIGHT)
   {
+    numTilesAcross = width / tileWidth;
+    numTilesDown = height / tileHeight;
+    numTiles = numTilesAcross * numTilesDown;
+  }
+
+  TiledFramebuffer(std::uint16_t w, std::uint16_t h, std::uint16_t tw, std::uint16_t th) {
+    width = w;
+    height = h;
+    tileWidth = tw;
+    tileHeight = th;
+    spec = glm::vec4(0.f, 0.f, w, h);
     numTilesAcross = width / tileWidth;
     numTilesDown = height / tileHeight;
     numTiles = numTilesAcross * numTilesDown;
@@ -147,3 +128,37 @@ public:
   unsigned tid;
 };
 
+
+struct square {
+  ivec4 centre;
+  ivec4 colour;
+  glm::vec2 topleft;
+  glm::vec2 bottomright;
+
+  square(glm::vec2 c) {
+    topleft = glm::vec2(c.x - 5, c.y - 5);
+    bottomright = glm::vec2(c.x + 5, c.y + 5);
+    centre = {c.x, c.y, 0.0f, 1.0f};
+  }
+
+  directions clip(TiledFramebuffer& fb) {
+    directions dirs;
+    if (topleft.x < 0) {
+      topleft.x = 0;
+      dirs.W = true;
+    }
+    if (topleft.y < 0) {
+      topleft.y = 0;
+      dirs.N = true;
+    }
+    if (bottomright.x >= fb.tileWidth) {
+      bottomright.x = fb.tileWidth;
+      dirs.E = true;
+    }
+    if (bottomright.y >= fb.tileHeight) {
+      bottomright.y = fb.tileHeight;
+      dirs.S = true;
+    }
+    return dirs;
+  }
+};

@@ -20,7 +20,7 @@ std::uint32_t splatPoints(cv::Mat& image,
                           TiledFramebuffer& fb,
                           std::uint8_t value) {
   std::uint32_t count = 0u;
-  const auto colour = cv::Vec3b(value, value, value);
+  const auto colour = cv::Vec3b(0, 255, 0);
 
   auto numPtsOnTile = clipCoords.size() / fb.numTiles;
   #pragma omp parallel for schedule(static, 128) num_threads(32)
@@ -32,7 +32,7 @@ std::uint32_t splatPoints(cv::Mat& image,
       // Convert from clip-space to pixel coords:
       glm::vec2 tileCoords = fb.clipSpaceToTile(bufferStrip[i], t);
       auto sq = square(tileCoords);
-      auto dirs = sq.clip();
+      auto dirs = sq.clip(fb);
 
       // Clip points to the image and splat:
       for (std::uint32_t i = sq.topleft.x; i < sq.bottomright.x; i++) {
