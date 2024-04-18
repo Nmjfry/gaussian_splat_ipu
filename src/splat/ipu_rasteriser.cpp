@@ -78,9 +78,6 @@ void IpuSplatter::getFrameBuffer(cv::Mat &frame) const {
   cvtColor(image_f_8u, frame, cv::COLOR_RGBA2BGR);
   frame = tileImageBuffer(frame, fbMapping.tileHeight, fbMapping.tileWidth, CV_8UC3, 3);
 
-  cv::imwrite("f.png", frame);
-
-
 }
 
 void IpuSplatter::getProjectedPoints(std::vector<glm::vec4>& pts) const {

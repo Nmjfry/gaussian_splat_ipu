@@ -33,7 +33,7 @@ std::uint32_t splatPoints(cv::Mat& image,
     auto bufferStrip = std::vector<glm::vec4>(clipCoords.begin() + t * numPtsOnTile,
                                                clipCoords.begin() + (t + 1) * numPtsOnTile);
 
-    for (auto i = 0u; i < 4; ++i) {
+    for (auto i = 0u; i < bufferStrip.size(); ++i) {
       // Convert from clip-space to pixel coords:
       glm::vec2 vp = fb.clipSpaceToViewport(bufferStrip[i]);
       auto sq = square(vp);
@@ -43,7 +43,7 @@ std::uint32_t splatPoints(cv::Mat& image,
       for (std::uint32_t i = sq.topleft.x; i < sq.bottomright.x; i++) {
         for (std::uint32_t j = sq.topleft.y; j < sq.bottomright.y; j++) {
           #pragma omp atomic update
-          image.at<cv::Vec3b>(j, i) = colour;
+          image.at<cv::Vec3b>(j, i) += colour;
           count += 1;
         }
       }

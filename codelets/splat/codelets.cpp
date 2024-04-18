@@ -42,26 +42,15 @@ public:
   // poplar::Input<poplar::Vector<float>> southIn;
   // poplar::Output<poplar::Vector<float>> southOut;
 
-  int toByteBufferIndex(float x, float y) {
-    return int(x + y * IPU_TILEWIDTH) * 4;
+  int toByteBufferIndex(float x, float y, std::pair<glm::vec2, glm::vec2> tileBounds) {
+    return int(floor(x - tileBounds.first.x) + floor(y - tileBounds.first.y) * IPU_TILEWIDTH) * 4;
   } 
-
-  
-  void rasterise(square &sq) {
-    // for each pixel in the square, check if it should be rendered in this tile
-    for (auto i = sq.topleft.x; i < sq.bottomright.x; i++) {
-      for (auto j = sq.topleft.y; j < sq.bottomright.y; j++) {
-        auto index = toByteBufferIndex(i, j);
-        memcpy(&localFb[index], &sq.colour, sizeof(sq.colour));
-      }
-    }
-  }
 
   bool compute(unsigned workerId) {
 
     // Transpose because GLM storage order is column major:
     const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
-    TiledFramebuffer viewport(IMWIDTH, IMHEIGHT, IPU_TILEWIDTH, IPU_TILEHEIGHT);
+    TiledFramebuffer viewport(IPU_TILEWIDTH, IPU_TILEHEIGHT);
     auto tileBounds = viewport.getTileBounds(tile_id[0]);
 
     for (auto i = 0; i < localFb.size(); i+=4) {
@@ -72,7 +61,7 @@ public:
     unsigned squaresSent = 0;
 
     // loop over the vertices originally stored on this tile
-    for (auto i = 0; i < vertsIn.size(); i+=4) {
+    for (auto i = 0; i < 50 * 4; i+=4) {
       auto upt = glm::make_vec4(&vertsIn[i]);
       auto pt = m * upt; 
       auto vp = viewport.clipSpaceToViewport(pt);
@@ -84,8 +73,19 @@ public:
       // if it needs to be copied to a different tile
       auto dirs = sq.clip(tileBounds);
 
-      sq.colour = {0.0f, 1.0f, 0.0f, 1.0f};
-      rasterise(sq);
+      sq.colour = {0.0f, 0.0f, 1.0f, 1.0f};
+
+      for (auto i = sq.topleft.x; i < sq.bottomright.x; i++) {
+        for (auto j = sq.topleft.y; j < sq.bottomright.y; j++) {
+          auto index = toByteBufferIndex(i, j, tileBounds);
+          ivec4 c = {0.0f, 0.0f, 0.0f, 1.0f};
+          auto ce = glm::make_vec4(&localFb[index]);
+          c.x = ce.x + sq.colour.x;
+          c.y = ce.y + sq.colour.y;
+          c.z = ce.z + sq.colour.z;
+          memcpy(&localFb[index], &c, sizeof(c));
+        }
+      }
 
       // if the square needs to be copied to another tile, copy it
       if (dirs.E && squaresSent < eastOut.size()) {
@@ -120,7 +120,18 @@ public:
       auto dirs = sq.clip(tileBounds);
 
       sq.colour = colour;
-      rasterise(sq);
+      
+      for (auto i = sq.topleft.x; i < sq.bottomright.x; i++) {
+        for (auto j = sq.topleft.y; j < sq.bottomright.y; j++) {
+          auto index = toByteBufferIndex(i, j, tileBounds);
+          ivec4 c = {0.0f, 0.0f, 0.0f, 1.0f};
+          auto ce = glm::make_vec4(&localFb[index]);
+          c.x = ce.x + sq.colour.x;
+          c.y = ce.y + sq.colour.y;
+          c.z = ce.z + sq.colour.z;
+          memcpy(&localFb[index], &c, sizeof(c));
+        }
+      }
 
       // // if the square needs to be copied to another tile, copy it
       // if (dirs.E && squaresSent < eastOut.size()) {

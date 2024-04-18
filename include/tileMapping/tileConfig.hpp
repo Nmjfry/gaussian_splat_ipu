@@ -2,12 +2,12 @@
 
 #include <glm/glm.hpp>
 
-#define CPU_TILEHEIGHT 720.0f
-#define CPU_TILEWIDTH 640.0f
+#define CPU_TILEHEIGHT 90.0f
+#define CPU_TILEWIDTH 160.0f
 // #define CPU_TILEHEIGHT 20.0f
 // #define CPU_TILEWIDTH 32.0f
-#define IPU_TILEHEIGHT 20.0f
-#define IPU_TILEWIDTH 32.0f
+#define IPU_TILEHEIGHT 90.0f
+#define IPU_TILEWIDTH 160.0f
 #define IMWIDTH 1280.0f
 #define IMHEIGHT 720.0f
 
@@ -30,7 +30,6 @@ typedef struct directions {
     bool W;
     static const int NUM_DIRS = 4;
 } directions;
-
 
 class TiledFramebuffer {
 public:
