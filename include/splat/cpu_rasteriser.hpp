@@ -20,6 +20,8 @@ void projectPoints(const splat::Points& in, const glm::mat4& projection, const g
 /// Returns the number of splatted points (the number of points that pass the image clip test).
 std::uint32_t splatPoints(cv::Mat& image,
                           const std::vector<glm::vec4>& clipCoords,
+                          const splat::Points& in,
+                          const glm::mat4& mvp,
                           TiledFramebuffer& fb,
                           std::uint8_t value=25);
 

@@ -4,6 +4,8 @@
 
 #define CPU_TILEHEIGHT 720.0f
 #define CPU_TILEWIDTH 640.0f
+// #define CPU_TILEHEIGHT 20.0f
+// #define CPU_TILEWIDTH 32.0f
 #define IPU_TILEHEIGHT 20.0f
 #define IPU_TILEWIDTH 32.0f
 #define IMWIDTH 1280.0f
@@ -28,8 +30,6 @@ typedef struct directions {
     bool W;
     static const int NUM_DIRS = 4;
 } directions;
-
-
 
 
 class TiledFramebuffer {
@@ -141,22 +141,23 @@ struct square {
     centre = {c.x, c.y, 0.0f, 1.0f};
   }
 
-  directions clip(TiledFramebuffer& fb) {
+  directions clip(std::pair<glm::vec2, glm::vec2> tileBounds) {
     directions dirs;
-    if (topleft.x < 0) {
-      topleft.x = 0;
+    auto [tl, br] = tileBounds;
+    if (topleft.x < tl.x) {
+      topleft.x = tl.x;
       dirs.W = true;
     }
-    if (topleft.y < 0) {
-      topleft.y = 0;
+    if (topleft.y < tl.y) {
+      topleft.y = tl.y;
       dirs.N = true;
     }
-    if (bottomright.x >= fb.tileWidth) {
-      bottomright.x = fb.tileWidth;
+    if (bottomright.x >= br.x) {
+      bottomright.x = br.x;
       dirs.E = true;
     }
-    if (bottomright.y >= fb.tileHeight) {
-      bottomright.y = fb.tileHeight;
+    if (bottomright.y >= br.y) {
+      bottomright.y = br.y;
       dirs.S = true;
     }
     return dirs;

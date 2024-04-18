@@ -62,6 +62,7 @@ public:
     // Transpose because GLM storage order is column major:
     const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
     TiledFramebuffer viewport(IMWIDTH, IMHEIGHT, IPU_TILEWIDTH, IPU_TILEHEIGHT);
+    auto tileBounds = viewport.getTileBounds(tile_id[0]);
 
     for (auto i = 0; i < localFb.size(); i+=4) {
       auto black = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -74,14 +75,14 @@ public:
     for (auto i = 0; i < vertsIn.size(); i+=4) {
       auto upt = glm::make_vec4(&vertsIn[i]);
       auto pt = m * upt; 
-      auto tileCoords = viewport.clipSpaceToTile(pt, tile_id[0]);
+      auto vp = viewport.clipSpaceToViewport(pt);
 
       // give point a square extent
-      auto sq = square(tileCoords);
+      auto sq = square(vp);
 
       // clip the square to the tile, return true 
       // if it needs to be copied to a different tile
-      auto dirs = sq.clip(viewport);
+      auto dirs = sq.clip(tileBounds);
 
       sq.colour = {0.0f, 1.0f, 0.0f, 1.0f};
       rasterise(sq);
@@ -105,17 +106,18 @@ public:
 
 
       auto pt = m * upt; 
-      auto tileCoords = viewport.clipSpaceToTile(pt, tile_id[0]);
+      auto vp = viewport.clipSpaceToViewport(pt);
 
       ivec4 colour;
       memcpy(&colour, &westIn[i+16], sizeof(ivec4));
 
       // give point a square extent
-      auto sq = square(tileCoords);
+      auto sq = square(vp);
+
 
       // clip the square to the tile, return true 
       // if it needs to be copied to a different tile
-      auto dirs = sq.clip(viewport);
+      auto dirs = sq.clip(tileBounds);
 
       sq.colour = colour;
       rasterise(sq);
