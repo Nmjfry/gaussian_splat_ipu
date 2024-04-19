@@ -145,13 +145,26 @@ void applyTileMapping(poplar::Graph& g, const poplar::Tensor& paddedInput, const
 
 // Add a vertex to project vertices that uses vanilla C++ code.
 void addProjectionVertex(poplar::Graph& g, poplar::ComputeSet& cs, unsigned t, const poplar::Tensor& tid,  const poplar::Tensor& westIn, const poplar::Tensor& eastOut,
-                         const poplar::Tensor& modelViewProjection, const poplar::Tensor& sliceIn, const poplar::Tensor& sliceOut) {
+                         const poplar::Tensor& modelViewProjection, const poplar::Tensor& ptsIn, const poplar::Tensor& localFb) {
   auto v = g.addVertex(cs, "Transform4x4");
   g.setTileMapping(v, t);
 
   g.connect(v["matrix"], modelViewProjection);
-  g.connect(v["vertsIn"], sliceIn);
-  g.connect(v["localFb"], sliceOut);
+  g.connect(v["vertsIn"], ptsIn);
+  g.connect(v["localFb"], localFb);
+  g.connect(v["tile_id"], tid);
+  g.connect(v["westIn"], westIn);
+  g.connect(v["eastOut"], eastOut);
+
+}
+
+void addProjectionVertex(poplar::Graph& g, poplar::ComputeSet& cs, unsigned t, const poplar::Tensor& tid,  const poplar::Tensor& westIn,
+                         const poplar::Tensor& eastOut, const poplar::Tensor& modelViewProjection, const poplar::Tensor& localFb) {
+  auto v = g.addVertex(cs, "Transform4x4");
+  g.setTileMapping(v, t);
+
+  g.connect(v["matrix"], modelViewProjection);
+  g.connect(v["localFb"], localFb);
   g.connect(v["tile_id"], tid);
   g.connect(v["westIn"], westIn);
   g.connect(v["eastOut"], eastOut);
@@ -197,6 +210,14 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   program::Sequence broadcastMvp;
   broadcastMvp.add(modelViewProjection.buildWrite(vg, true));
 
+  auto fbGrainSize = 4;
+  auto fbToTileMapping = calculateMapping(vg, frameBuffer.size(), fbGrainSize, fbMapping);
+  printf("Framebuffer layout: %lu, %lu, %lu\n", fbToTileMapping.padding, fbToTileMapping.elementsPerTile, fbToTileMapping.totalTiles);
+  auto paddedFramebuffer = vg.addVariable(FLOAT, {frameBuffer.size() + fbToTileMapping.padding}, "padded_frame_buffer");
+  applyTileMapping(vg, paddedFramebuffer, fbToTileMapping);
+  
+  outputFramebuffer = paddedFramebuffer.slice(0, frameBuffer.size());
+
   // Map the point cloud vertices across all tiles. TODO: If we are not using AMP the only constraint
   // is that the grain size must be a multiple of 4 (so that 4-vectors are not split between
   // tiles). If we use the AMP we need to have at least 8 4-vectors to fill the AMP pipeline so
@@ -210,14 +231,6 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   // We only want to stream to a slice of the padded tensor:
   inputVertices = paddedInput.slice(0, hostVertices.size());
 
-  auto fbGrainSize = 4;
-  auto fbToTileMapping = calculateMapping(vg, frameBuffer.size(), fbGrainSize, fbMapping);
-  printf("Framebuffer layout: %lu, %lu, %lu\n", fbToTileMapping.padding, fbToTileMapping.elementsPerTile, fbToTileMapping.totalTiles);
-  auto paddedFramebuffer = vg.addVariable(FLOAT, {frameBuffer.size() + fbToTileMapping.padding}, "padded_frame_buffer");
-  applyTileMapping(vg, paddedFramebuffer, fbToTileMapping);
-  
-  outputFramebuffer = paddedFramebuffer.slice(0, frameBuffer.size());
-
   // this program sequence will copy the points between all the tiles in the graph
   program::Sequence broadcastPoints;
 
@@ -227,13 +240,27 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
   // Get the tile mapping and connect the vertices:
   const auto tm = vg.getTileMapping(paddedInput);
+  const auto tmFb = vg.getTileMapping(paddedFramebuffer);
 
-  std::vector<poplar::VertexRef> verts;
+  uint64 channelSize = 200;
+
+  std::vector<poplar::Tensor> tileInChannels(tm.size());
+  std::vector<poplar::Tensor> tileOutChannels(tm.size());
+  for (auto t = 0u; t < tm.size(); ++t) {
+    poplar::Tensor eastOut = vg.addVariable(FLOAT, {channelSize * sizeof(struct square)}, "points_to_east");
+    poplar::Tensor westIn = vg.addVariable(FLOAT, {channelSize * sizeof(struct square)}, "points_from_west");
+    tileInChannels[t] = westIn;
+    tileOutChannels[t] = eastOut;
+    vg.setTileMapping(westIn, t);
+    vg.setTileMapping(eastOut, t);
+  }
+
 
   for (auto t = 0u; t < tm.size(); ++t) {
     const auto& m = tm[t];
+    const auto& mFb = tmFb[t];
     if (m.size() > 1u) {
-      throw std::runtime_error("Expected vertices to be stored as a single contiguous region per tile.");
+      throw std::runtime_error("Expected fb to be stored as a single contiguous region per tile.");
     }
     if (m.size() > 0u) {
       // Add the tile local MVP matrix variable and append a copies that broadcast it to all tiles:
@@ -241,64 +268,25 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       vg.setTileMapping(localMvp, t);
       broadcastMvp.add(program::Copy(modelViewProjection, localMvp));
 
+      auto ptsIn  = paddedInput.slice(m.front());
+
       Tensor tid = vg.addConstant<int>(INT, {1}, {int(t)});
       vg.setTileMapping(tid, t);
 
-      auto sliceIn  = paddedInput.slice(m.front());
+      auto sliceFb = paddedFramebuffer.slice(mFb.front());
 
-      auto v = vg.addVertex(projectCs, "Transform4x4");
-      vg.setTileMapping(v, t);
+      auto westIn = tileInChannels[t];
+      auto eastOut = tileOutChannels[t];
 
-      vg.connect(v["matrix"], localMvp.flatten());
-      vg.connect(v["vertsIn"], sliceIn);
-      vg.connect(v["tile_id"], tid);
- 
-      verts.push_back(v);
+      if (t > 0) {
+        auto eOut = tileOutChannels[t - 1];
+        broadcastPoints.add(program::Copy(eOut, westIn));
+      }
+      
+      addProjectionVertex(vg, projectCs, t, tid, westIn, eastOut, localMvp.flatten(), ptsIn, sliceFb);
     }
   }
 
-  const auto tmFb = vg.getTileMapping(paddedFramebuffer);
-  uint64 sizeof_square = sizeof(struct square);
-  uint64 numSparePoints = 200;
-  auto eastOut = vg.addVariable(FLOAT, {numSparePoints * sizeof_square}, "points_to_east");
-  vg.setTileMapping(eastOut, 0u);
-
-  for (auto t = 0u; t < tmFb.size(); ++t) {
-    const auto& mFb = tmFb[t];
-
-    if (mFb.size() > 1u) {
-      throw std::runtime_error("Expected fb to be stored as a single contiguous region per tile.");
-    }
-
-    if (tmFb.size() != tm.size()) {
-      printf("Expected %lu, got %lu\n", tm.size(), tmFb.size());
-      throw std::runtime_error("Expected vertices to be mapped to the same number of tiles as the framebuffer.");
-    }
-
-    if (mFb.size() > 0u && t < verts.size()) {
-      auto sliceFb = paddedFramebuffer.slice(mFb.front());
-      auto v = verts[t];
-
-      // each tile will write misplaced points to 4 vectors depending on the final destination 
-      // at exchange, the four vectors are copied to the neighbouring tiles 
-      // each tile will read from write to its own 8 in/out streams
-      auto nextTile = t + 1;
-
-      auto westIn = vg.addVariable(FLOAT, {numSparePoints * sizeof_square}, "points_from_west");
-      vg.setTileMapping(westIn, nextTile);
-      broadcastPoints.add(program::Copy(eastOut, westIn));
-
-      vg.connect(v["localFb"], sliceFb);
-      vg.connect(v["westIn"], westIn);
-      vg.connect(v["eastOut"], eastOut);
-
-      if (nextTile < 1439) {
-        auto eastOutNext = vg.addVariable(FLOAT, {numSparePoints * sizeof_square}, "points_to_east");
-        vg.setTileMapping(eastOutNext, nextTile);
-        eastOut = eastOutNext;
-      }
-    }
-  }                     
 
   program::Sequence main;
   main.add(broadcastMvp);

@@ -60,8 +60,14 @@ public:
 
     unsigned squaresSent = 0;
 
+    ivec4 c2 = {0.0f, 1.0f, 0.0f, 1.0f};
+    if ( tile_id[0] % 3 == 0 ) {
+      c2.y = 0.0f;
+      c2.x = 1.0f;
+    }
+
     // loop over the vertices originally stored on this tile
-    for (auto i = 0; i < 50 * 4; i+=4) {
+    for (auto i = 0; i < vertsIn.size(); i+=4) {
       auto upt = glm::make_vec4(&vertsIn[i]);
       auto pt = m * upt; 
       auto vp = viewport.clipSpaceToViewport(pt);
@@ -75,6 +81,8 @@ public:
 
       sq.colour = {0.0f, 0.0f, 1.0f, 1.0f};
 
+      
+
       for (auto i = sq.topleft.x; i < sq.bottomright.x; i++) {
         for (auto j = sq.topleft.y; j < sq.bottomright.y; j++) {
           auto index = toByteBufferIndex(i, j, tileBounds);
@@ -83,7 +91,7 @@ public:
           c.x = ce.x + sq.colour.x;
           c.y = ce.y + sq.colour.y;
           c.z = ce.z + sq.colour.z;
-          memcpy(&localFb[index], &c, sizeof(c));
+          memcpy(&localFb[index], &c2, sizeof(c2));
         }
       }
 
@@ -129,7 +137,7 @@ public:
           c.x = ce.x + sq.colour.x;
           c.y = ce.y + sq.colour.y;
           c.z = ce.z + sq.colour.z;
-          memcpy(&localFb[index], &c, sizeof(c));
+          memcpy(&localFb[index], &c2, sizeof(c2));
         }
       }
 

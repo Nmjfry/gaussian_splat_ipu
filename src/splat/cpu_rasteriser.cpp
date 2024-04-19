@@ -33,7 +33,7 @@ std::uint32_t splatPoints(cv::Mat& image,
     auto bufferStrip = std::vector<glm::vec4>(clipCoords.begin() + t * numPtsOnTile,
                                                clipCoords.begin() + (t + 1) * numPtsOnTile);
 
-    for (auto i = 0u; i < bufferStrip.size(); ++i) {
+    for (auto i = 0u; i < 5; ++i) {
       // Convert from clip-space to pixel coords:
       glm::vec2 vp = fb.clipSpaceToViewport(bufferStrip[i]);
       auto sq = square(vp);
