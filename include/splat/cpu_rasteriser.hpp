@@ -8,7 +8,7 @@
 
 #include <splat/geometry.hpp>
 #include <splat/camera.hpp>
-#include <tileMapping/tileConfig.hpp>
+#include <tileMapping/tile_config.hpp>
 
 namespace splat {
 

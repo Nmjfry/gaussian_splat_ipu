@@ -6,7 +6,7 @@
 
 #include <glm/mat4x4.hpp>
 #include <glm/gtc/type_ptr.hpp>
-#include </home/nf20/workspace/gaussian_splat_ipu/include/tileMapping/tileConfig.hpp>
+#include </home/nf20/workspace/gaussian_splat_ipu/include/tileMapping/tile_config.hpp>
 
 #ifdef __IPU__
 #include <ipu_vector_math>

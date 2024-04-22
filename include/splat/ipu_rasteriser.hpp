@@ -7,7 +7,7 @@
 #include <ipu/ipu_utils.hpp>
 #include <glm/mat4x4.hpp>
 #include <opencv2/imgproc.hpp>
-#include <tileMapping/tileConfig.hpp>
+#include <tileMapping/tile_config.hpp>
 
 
 namespace splat {

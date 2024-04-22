@@ -2,14 +2,17 @@
 
 #include <glm/glm.hpp>
 
-#define CPU_TILEHEIGHT 720.0f
-#define CPU_TILEWIDTH 20.0f
-// #define CPU_TILEHEIGHT 20.0f
-// #define CPU_TILEWIDTH 32.0f
-#define IPU_TILEHEIGHT 20.0f
-#define IPU_TILEWIDTH 32.0f
 #define IMWIDTH 1280.0f
 #define IMHEIGHT 720.0f
+#define TILES_ACCROSS 8.0f
+#define TILES_DOWN 8.0f
+
+#define CPU_TILEHEIGHT (IMHEIGHT / TILES_DOWN)
+#define CPU_TILEWIDTH (IMWIDTH / TILES_ACCROSS)
+// #define CPU_TILEHEIGHT 20.0f
+// #define CPU_TILEWIDTH 32.0f
+#define IPU_TILEHEIGHT (IMHEIGHT / TILES_DOWN)
+#define IPU_TILEWIDTH  (IMWIDTH / TILES_ACCROSS)
 
 typedef struct {
   float x;
@@ -28,6 +31,7 @@ typedef struct directions {
     bool E;
     bool S;
     bool W;
+    bool keep;
     static const int NUM_DIRS = 4;
 } directions;
 
@@ -131,6 +135,7 @@ public:
 struct square {
   ivec4 centre;
   ivec4 colour;
+  unsigned gid;
   glm::vec2 topleft;
   glm::vec2 bottomright;
 
