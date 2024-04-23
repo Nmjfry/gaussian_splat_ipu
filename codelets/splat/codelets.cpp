@@ -175,8 +175,6 @@ public:
       }
     }
 
-    printf("tid: %d, squaresSentRight: %d, squaresSentLeft: %d\n", tile_id[0], squaresSentRight, squaresSentLeft);
-
     recieveFromBuffer(leftIn, viewport, m);
     recieveFromBuffer(rightIn, viewport, m);
 
