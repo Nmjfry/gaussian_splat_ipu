@@ -48,7 +48,7 @@ std::uint32_t splatPoints(cv::Mat& image,
         }
       }
 
-      if (dirs.E && t < fb.numTiles - 1) {
+      if (dirs.right && t < fb.numTiles - 1) {
         copiedPoints[t + 1].push_back(glm::vec4(in[i].p, 1.f));
       }
 

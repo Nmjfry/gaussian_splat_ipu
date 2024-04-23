@@ -27,10 +27,10 @@ typedef struct {
 } ivec2;
 
 typedef struct directions {
-    bool N;
-    bool E;
-    bool S;
-    bool W;
+    bool up;
+    bool right;
+    bool down;
+    bool left;
     bool keep;
     static const int NUM_DIRS = 4;
 } directions;
@@ -116,6 +116,18 @@ public:
     return std::make_pair(tl, br);
   }
 
+  directions checkImageBoundaries(unsigned tid) {
+    directions dirs;
+    auto [tl, br] = getTileBounds(tid);
+
+    dirs.left = tl.x > 0;
+    dirs.up = tl.y > 0;
+    dirs.right = br.x < width;
+    dirs.down = br.y < height;
+
+    return dirs;
+  }
+
   glm::vec4 spec;
   
   std::uint16_t width;
@@ -150,19 +162,19 @@ struct square {
     auto [tl, br] = tileBounds;
     if (topleft.x < tl.x) {
       topleft.x = tl.x;
-      dirs.W = true;
+      dirs.left = true;
     }
     if (topleft.y < tl.y) {
       topleft.y = tl.y;
-      dirs.N = true;
+      dirs.up = true;
     }
     if (bottomright.x >= br.x) {
       bottomright.x = br.x;
-      dirs.E = true;
+      dirs.right = true;
     }
     if (bottomright.y >= br.y) {
       bottomright.y = br.y;
-      dirs.S = true;
+      dirs.down = true;
     }
     return dirs;
   }

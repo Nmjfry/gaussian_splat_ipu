@@ -8,6 +8,8 @@
 
 #include <poputil/TileMapping.hpp>
 
+#include <tileMapping/edge_builder.hpp>
+
 using namespace poplar;
 
 namespace splat {
@@ -158,19 +160,6 @@ void addProjectionVertex(poplar::Graph& g, poplar::ComputeSet& cs, unsigned t, c
 
 }
 
-void addProjectionVertex(poplar::Graph& g, poplar::ComputeSet& cs, unsigned t, const poplar::Tensor& tid,  const poplar::Tensor& westIn,
-                         const poplar::Tensor& eastOut, const poplar::Tensor& modelViewProjection, const poplar::Tensor& localFb) {
-  auto v = g.addVertex(cs, "Transform4x4");
-  g.setTileMapping(v, t);
-
-  g.connect(v["matrix"], modelViewProjection);
-  g.connect(v["localFb"], localFb);
-  g.connect(v["tile_id"], tid);
-  g.connect(v["westIn"], westIn);
-  g.connect(v["eastOut"], eastOut);
-
-}
-
 // Add a vertex to project vertices that uses is optimised using the tile's AMP engine.
 void addProjectionVertexAMP(poplar::Graph& g, poplar::ComputeSet& cs, unsigned t,
                         const poplar::Tensor& modelViewProjection, const poplar::Tensor& sliceIn, const poplar::Tensor& sliceOut) {
@@ -231,30 +220,18 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   // We only want to stream to a slice of the padded tensor:
   inputVertices = paddedInput.slice(0, hostVertices.size());
 
-  // this program sequence will copy the points between all the tiles in the graph
-  program::Sequence broadcastPoints;
-
   // Build a compute set to transform the points:
   const auto csName = disableAMPVertices ? "project" : "project_amp";
-  auto projectCs = vg.addComputeSet(csName);
+  auto splatCs = vg.addComputeSet(csName);
 
   // Get the tile mapping and connect the vertices:
   const auto tm = vg.getTileMapping(paddedInput);
   const auto tmFb = vg.getTileMapping(paddedFramebuffer);
 
-  uint64 channelSize = 200;
+  unsigned numPoints = 200;
+  std::size_t channelSize = 200 * sizeof(struct square);
 
-  std::vector<poplar::Tensor> tileInChannels(tm.size());
-  std::vector<poplar::Tensor> tileOutChannels(tm.size());
-  for (auto t = 0u; t < tm.size(); ++t) {
-    poplar::Tensor eastOut = vg.addVariable(FLOAT, {channelSize * sizeof(struct square)}, "points_to_east");
-    poplar::Tensor westIn = vg.addVariable(FLOAT, {channelSize * sizeof(struct square)}, "points_from_west");
-    tileInChannels[t] = westIn;
-    tileOutChannels[t] = eastOut;
-    vg.setTileMapping(westIn, t);
-    vg.setTileMapping(eastOut, t);
-  }
-
+  std::vector<poplar::VertexRef> vertices;
 
   for (auto t = 0u; t < tm.size(); ++t) {
     const auto& m = tm[t];
@@ -268,30 +245,79 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       vg.setTileMapping(localMvp, t);
       broadcastMvp.add(program::Copy(modelViewProjection, localMvp));
 
-      auto ptsIn  = paddedInput.slice(m.front());
+      auto ptsIn = paddedInput.slice(m.front());
 
       Tensor tid = vg.addConstant<int>(INT, {1}, {int(t)});
       vg.setTileMapping(tid, t);
 
       auto sliceFb = paddedFramebuffer.slice(mFb.front());
 
+      auto v = vg.addVertex(splatCs, "Transform4x4");
+      vg.setTileMapping(v, t);
+      vg.connect(v["matrix"], localMvp.flatten());
+      vg.connect(v["vertsIn"], ptsIn);
+      vg.connect(v["localFb"], sliceFb);
+      vg.connect(v["tile_id"], tid);
+      vertices.push_back(v);
+    }
+  }
+
+  // for my edge builder I need 
+  // 1. tile Mapping
+  // 2. virtual graph
+  // 3. vertices (cs)
+  // 4. program sequence
+
+  // EdgeBuilder edgeBuilder(vg, vertices, channelSize, fbMapping);
+  
+  // for (auto t = 0u; t < tm.size(); ++t) {
+  //   const auto& m = tm[t];
+  //   if (m.size() > 0u) {
+  //     // connects tiles that are adjacent to each other in the x and y directions
+  //     edgeBuilder.generateTileChannels(t);
+  //   }
+  // }
+
+  // for (auto t = 0u; t < tm.size(); ++t) {
+  //   const auto& m = tm[t];
+  //   if (m.size() > 0u) {
+  //     // connects tiles that are adjacent to each other in the x and y directions
+  //     edgeBuilder.generateLocalConnectivity(t);
+  //   }
+  // }
+  // // // this program sequence will copy the points between all the tiles in the graph
+  program::Sequence broadcastPoints;// = edgeBuilder.getConnectivity();
+
+  std::vector<poplar::Tensor> tileInChannels(tm.size());
+  std::vector<poplar::Tensor> tileOutChannels(tm.size());
+  for (auto t = 0u; t < tm.size(); ++t) {
+    poplar::Tensor eastOut = vg.addVariable(FLOAT, {channelSize}, "points_to_east");
+    poplar::Tensor westIn = vg.addVariable(FLOAT, {channelSize}, "points_from_west");
+    tileInChannels[t] = westIn;
+    tileOutChannels[t] = eastOut;
+    vg.setTileMapping(westIn, t);
+    vg.setTileMapping(eastOut, t);
+  }
+
+  for (auto t = 0u; t < tm.size(); ++t) {
+    const auto& m = tm[t];
+    if (m.size() > 0u) {
       auto westIn = tileInChannels[t];
       auto eastOut = tileOutChannels[t];
-
+      auto v = vertices[t];
+      vg.connect(v["westIn"], westIn);
+      vg.connect(v["eastOut"], eastOut);
       if (t > 0) {
         auto eOut = tileOutChannels[t - 1];
         broadcastPoints.add(program::Copy(eOut, westIn));
       }
-      
-      addProjectionVertex(vg, projectCs, t, tid, westIn, eastOut, localMvp.flatten(), ptsIn, sliceFb);
     }
   }
-
 
   program::Sequence main;
   main.add(broadcastMvp);
   main.add(broadcastPoints);
-  main.add(program::Execute(projectCs));
+  main.add(program::Execute(splatCs));
   main.add(outputFramebuffer.buildRead(vg, true));
 
   program::Sequence setup;
