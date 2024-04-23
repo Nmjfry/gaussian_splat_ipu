@@ -36,7 +36,9 @@ std::uint32_t splatPoints(cv::Mat& image,
     for (auto i = 0u; i < 5; ++i) {
       // Convert from clip-space to pixel coords:
       glm::vec2 vp = fb.clipSpaceToViewport(bufferStrip[i]);
-      auto sq = square(vp);
+      struct square sq;
+      sq.centre = {vp.x, vp.y, 0.0f, 1.0f};
+      sq.extend();
       auto dirs = sq.clip(bounds);
 
       // Clip points to the image and splat:
@@ -63,7 +65,9 @@ std::uint32_t splatPoints(cv::Mat& image,
     for (auto i = 0u; i < inPts.size(); ++i) {
       // Convert from clip-space to pixel coords:
       glm::vec2 vp = fb.clipSpaceToViewport(mvp * inPts[i]);
-      auto sq = square(vp);
+      struct square sq;
+      sq.centre = {vp.x, vp.y, 0.0f, 1.0f};
+      sq.extend();
       auto dirs = sq.clip(bounds);
 
       // Clip points to the image and splat:

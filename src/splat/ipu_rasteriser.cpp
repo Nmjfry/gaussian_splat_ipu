@@ -228,8 +228,8 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   const auto tm = vg.getTileMapping(paddedInput);
   const auto tmFb = vg.getTileMapping(paddedFramebuffer);
 
-  unsigned numPoints = 200;
-  std::size_t channelSize = 200 * sizeof(struct square);
+  unsigned numPoints = 400;
+  std::size_t channelSize = numPoints * sizeof(struct square);
 
   std::vector<poplar::VertexRef> vertices;
 
@@ -288,28 +288,53 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   // // // this program sequence will copy the points between all the tiles in the graph
   program::Sequence broadcastPoints;// = edgeBuilder.getConnectivity();
 
-  std::vector<poplar::Tensor> tileInChannels(tm.size());
-  std::vector<poplar::Tensor> tileOutChannels(tm.size());
+  std::vector<poplar::Tensor> leftInChannels(tm.size());
+  std::vector<poplar::Tensor> rightOutChannels(tm.size());
+
+  std::vector<poplar::Tensor> rightInChannels(tm.size());
+  std::vector<poplar::Tensor> leftOutChannels(tm.size());
+
   for (auto t = 0u; t < tm.size(); ++t) {
-    poplar::Tensor eastOut = vg.addVariable(FLOAT, {channelSize}, "points_to_east");
-    poplar::Tensor westIn = vg.addVariable(FLOAT, {channelSize}, "points_from_west");
-    tileInChannels[t] = westIn;
-    tileOutChannels[t] = eastOut;
-    vg.setTileMapping(westIn, t);
-    vg.setTileMapping(eastOut, t);
+    poplar::Tensor rightOut = vg.addVariable(FLOAT, {channelSize});
+    poplar::Tensor leftIn = vg.addVariable(FLOAT, {channelSize});
+
+    poplar::Tensor rightIn = vg.addVariable(FLOAT, {channelSize});
+    poplar::Tensor leftOut = vg.addVariable(FLOAT, {channelSize});
+
+    rightInChannels[t] = rightIn;
+    leftOutChannels[t] = leftOut;
+
+    leftInChannels[t] = leftIn;
+    rightOutChannels[t] = rightOut;
+
+    vg.setTileMapping(leftIn, t);
+    vg.setTileMapping(rightOut, t);
+
+    vg.setTileMapping(rightIn, t);
+    vg.setTileMapping(leftOut, t);
   }
 
   for (auto t = 0u; t < tm.size(); ++t) {
     const auto& m = tm[t];
     if (m.size() > 0u) {
-      auto westIn = tileInChannels[t];
-      auto eastOut = tileOutChannels[t];
       auto v = vertices[t];
-      vg.connect(v["westIn"], westIn);
-      vg.connect(v["eastOut"], eastOut);
+
+      auto leftIn = leftInChannels[t];
+      auto rightOut = rightOutChannels[t];
+      vg.connect(v["leftIn"], leftIn);
+      vg.connect(v["rightOut"], rightOut);
       if (t > 0) {
-        auto eOut = tileOutChannels[t - 1];
-        broadcastPoints.add(program::Copy(eOut, westIn));
+        auto eOut = rightOutChannels[t - 1];
+        broadcastPoints.add(program::Copy(eOut, leftIn));
+      }
+
+      auto rightIn = rightInChannels[t];
+      auto leftOut = leftOutChannels[t];
+      vg.connect(v["rightIn"], rightIn);
+      vg.connect(v["leftOut"], leftOut);
+      if (t < fbMapping.numTiles) {
+        auto nOut = leftOutChannels[t + 1];
+        broadcastPoints.add(program::Copy(nOut, rightIn));
       }
     }
   }

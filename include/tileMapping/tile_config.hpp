@@ -4,8 +4,8 @@
 
 #define IMWIDTH 1280.0f
 #define IMHEIGHT 720.0f
-#define TILES_ACCROSS 8.0f
-#define TILES_DOWN 8.0f
+#define TILES_ACCROSS 40.0f
+#define TILES_DOWN 36.0f
 
 #define CPU_TILEHEIGHT (IMHEIGHT / TILES_DOWN)
 #define CPU_TILEWIDTH (IMWIDTH / TILES_ACCROSS)
@@ -14,17 +14,34 @@
 #define IPU_TILEHEIGHT (IMHEIGHT / TILES_DOWN)
 #define IPU_TILEWIDTH  (IMWIDTH / TILES_ACCROSS)
 
-typedef struct {
+struct ivec4 {
   float x;
   float y;
   float z;
   float w;
-} ivec4;
+  struct ivec4 operator+(ivec4 const &other) {
+    return {x + other.x, y + other.y, z + other.z, w + other.w};
+  }
+
+  void print() {
+    printf("x: %f, y: %f, z: %f, w: %f\n", x, y, z, w);
+  }
+};
+
+typedef struct ivec4 ivec4;
 
 typedef struct {
   float x;
   float y;
 } ivec2;
+
+enum class Direction {
+  UP,
+  RIGHT,
+  DOWN,
+  LEFT,
+  NUM_DIRS
+};
 
 typedef struct directions {
     bool up;
@@ -143,6 +160,7 @@ public:
   unsigned tid;
 };
 
+#define EXTENT 10.0f
 
 struct square {
   ivec4 centre;
@@ -151,10 +169,13 @@ struct square {
   glm::vec2 topleft;
   glm::vec2 bottomright;
 
-  square(glm::vec2 c) {
-    topleft = glm::vec2(c.x - 5, c.y - 5);
-    bottomright = glm::vec2(c.x + 5, c.y + 5);
-    centre = {c.x, c.y, 0.0f, 1.0f};
+  square() {
+    colour = {0, 1.0f, 0, 0};
+  }
+
+  void extend() {
+    topleft = glm::vec2(centre.x - (EXTENT / 2.0f), centre.y - (EXTENT / 2.0f));
+    bottomright = glm::vec2(centre.x + (EXTENT / 2.0f), centre.y + (EXTENT / 2.0f));
   }
 
   directions clip(std::pair<glm::vec2, glm::vec2> tileBounds) {

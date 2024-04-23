@@ -30,11 +30,14 @@ public:
   poplar::Output<poplar::Vector<float>> localFb;
   poplar::Input<poplar::Vector<int>> tile_id;
 
-  poplar::Input<poplar::Vector<float>> westIn; 
-  // poplar::Output<poplar::Vector<float>> westOut;
+  poplar::Input<poplar::Vector<float>> leftIn; 
+  poplar::Output<poplar::Vector<float>> rightOut;
+  unsigned squaresSentRight = 0;
 
-  // poplar::Input<poplar::Vector<float>> eastIn;
-  poplar::Output<poplar::Vector<float>> eastOut;
+  poplar::Input<poplar::Vector<float>> rightIn;
+  poplar::Output<poplar::Vector<float>> leftOut;
+  unsigned squaresSentLeft = 0;
+
 
   // poplar::Input<poplar::Vector<float>> northIn;
   // poplar::Output<poplar::Vector<float>> northOut;
@@ -46,110 +49,137 @@ public:
     return int(floor(x - tileBounds.first.x) + floor(y - tileBounds.first.y) * IPU_TILEWIDTH) * 4;
   } 
 
+  bool isWithinTile(float x, float y, std::pair<glm::vec2, glm::vec2> tileBounds) {
+    return x >= tileBounds.first.x && x < tileBounds.second.x && y >= tileBounds.first.y && y < tileBounds.second.y;
+  }
+
+  ivec4 getPixel(int idx) {
+    ivec4 pixel;
+    memcpy(&pixel, &localFb[idx], sizeof(pixel));
+    return pixel;
+  }
+
+  void splat(struct square sq, std::pair<glm::vec2, glm::vec2> tileBounds) {
+    for (auto i = sq.topleft.x; i < sq.bottomright.x; i++) {
+        for (auto j = sq.topleft.y; j < sq.bottomright.y; j++) {
+          auto index = toByteBufferIndex(i, j, tileBounds);
+          ivec4 c = getPixel(index) + sq.colour;
+          memcpy(&localFb[index], &c, sizeof(c));
+      }
+    }
+  }
+
+  void pack(poplar::Vector<float> &buffer, unsigned idx, struct square sq) {
+    memcpy(&buffer[idx], &sq, sizeof(sq.centre));
+    memcpy(&buffer[idx+sizeof(sq.centre)], &sq.colour, sizeof(sq.colour));
+  }
+
+  square unpack(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx) {
+    struct square sq;
+    ivec4 centre;
+    memcpy(&centre, &buffer[idx], sizeof(centre));
+    glm::vec4 upt = glm::vec4(centre.x, centre.y, centre.z, centre.w);
+    ivec4 colour;
+    memcpy(&colour, &buffer[idx+sizeof(centre)], sizeof(colour));
+    sq.centre = centre;
+    sq.colour = colour;
+    return sq;
+  }
+
+  void clearFb() {
+    for (auto i = 0; i < localFb.size(); i+=4) {
+      auto black = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
+      memcpy(&localFb[i], glm::value_ptr(black), sizeof(black));
+    }
+  }
+
+  void recieveFromBuffer(poplar::Input<poplar::Vector<float>> &bufferIn, TiledFramebuffer &viewport, const glm::mat4 &m) {
+    auto tileBounds = viewport.getTileBounds(tile_id[0]);
+
+    for (auto i = 0; i < bufferIn.size(); i+=sizeof(square)) {
+      struct square sq = unpack(bufferIn, i);
+
+      auto upt = glm::vec4(sq.centre.x, sq.centre.y, sq.centre.z, sq.centre.w);
+
+      auto pt = m * upt; 
+      auto vp = viewport.clipSpaceToViewport(pt);
+
+      // give point a square extent
+      sq.centre = {vp.x, vp.y, 0.0f, 1.0f};
+      sq.extend();
+
+      // clip the square to the tile, return true 
+      // if it needs to be copied to a different tile
+      auto dirs = sq.clip(tileBounds);
+      splat(sq, tileBounds);
+
+      if (dirs.right && squaresSentRight < rightOut.size()) {
+        sq.centre = {upt.x, upt.y, upt.z, upt.w};
+        pack(rightOut, squaresSentRight, sq);
+        squaresSentRight+=sizeof(square);
+      }
+
+      if (dirs.left && squaresSentLeft < leftOut.size()) {
+        sq.centre = {upt.x, upt.y, upt.z, upt.w};
+        pack(leftOut, squaresSentLeft, sq);
+        squaresSentLeft+=sizeof(square);
+      }
+    }
+  }
+
   bool compute(unsigned workerId) {
 
     // Transpose because GLM storage order is column major:
     const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
     TiledFramebuffer viewport(IPU_TILEWIDTH, IPU_TILEHEIGHT);
     auto tileBounds = viewport.getTileBounds(tile_id[0]);
+    float tid_c = tile_id[0] * (1.0f / viewport.numTiles);
+    ivec4 tidColour = {1.0f, 0.0f, tid_c, 1.0f};
+    // zero the framebuffer
+    clearFb();
 
-    for (auto i = 0; i < localFb.size(); i+=4) {
-      auto black = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
-      memcpy(&localFb[i], glm::value_ptr(black), sizeof(black));
-    }
-
-    unsigned squaresSent = 0;
-
-    ivec4 c2 = {0.0f, 1.0f, 0.0f, 1.0f};
-    if ( tile_id[0] % 3 == 0 ) {
-      c2.y = 0.0f;
-      c2.x = 1.0f;
-    }
-
+    squaresSentRight = 0;
+    squaresSentLeft = 0;
+    
     // loop over the vertices originally stored on this tile
     for (auto i = 0; i < vertsIn.size(); i+=4) {
+      struct square sq;
+
       auto upt = glm::make_vec4(&vertsIn[i]);
+
       auto pt = m * upt; 
       auto vp = viewport.clipSpaceToViewport(pt);
 
       // give point a square extent
-      auto sq = square(vp);
+      sq.centre = {vp.x, vp.y, 0.0f, 1.0f};
+      sq.extend();
 
       // clip the square to the tile, return true 
-      // if it needs to be copied to a different tile
+      // if it needs to be copied to a different direction
       auto dirs = sq.clip(tileBounds);
-
-      sq.colour = {0.0f, 0.0f, 1.0f, 1.0f};
-
-      
-
-      for (auto i = sq.topleft.x; i < sq.bottomright.x; i++) {
-        for (auto j = sq.topleft.y; j < sq.bottomright.y; j++) {
-          auto index = toByteBufferIndex(i, j, tileBounds);
-          ivec4 c = {0.0f, 0.0f, 0.0f, 1.0f};
-          auto ce = glm::make_vec4(&localFb[index]);
-          c.x = ce.x + sq.colour.x;
-          c.y = ce.y + sq.colour.y;
-          c.z = ce.z + sq.colour.z;
-          memcpy(&localFb[index], &c2, sizeof(c2));
-        }
-      }
+      splat(sq, tileBounds);
 
       // if the square needs to be copied to another tile, copy it
-      if (dirs.E && squaresSent < eastOut.size()) {
-        memcpy(&eastOut[squaresSent], glm::value_ptr(upt), sizeof(upt));
-        float tid_colour = tile_id[0] * (1.0f / viewport.numTiles);
-        ivec4 colour = {1.0f, 0.0f, tid_colour, 1.0f};
-        memcpy(&eastOut[squaresSent+16], &colour, sizeof(colour));
-        squaresSent+=sizeof(square);
+      if (dirs.right && squaresSentRight < rightOut.size()) {
+        sq.centre = {upt.x, upt.y, upt.z, upt.w};
+        sq.colour = tidColour;
+        pack(rightOut, squaresSentRight, sq);
+        squaresSentRight+=sizeof(square);
+      }
+
+      if (dirs.left && squaresSentLeft < leftOut.size()) {
+        sq.centre = {upt.x, upt.y, upt.z, upt.w};
+        sq.colour = tidColour;
+        pack(leftOut, squaresSentLeft, sq);
+        squaresSentLeft+=sizeof(square);
       }
     }
 
-    unsigned bufferInSize = 200 * sizeof(square);
-    auto i = 0;
-    for (; i < bufferInSize; i+=sizeof(square)) {
-      ivec4 iupt;
-      memcpy(&iupt, &westIn[i], sizeof(ivec4));
-      glm::vec4 upt = glm::vec4(iupt.x, iupt.y, iupt.z, iupt.w);
+    printf("tid: %d, squaresSentRight: %d, squaresSentLeft: %d\n", tile_id[0], squaresSentRight, squaresSentLeft);
 
+    recieveFromBuffer(leftIn, viewport, m);
+    recieveFromBuffer(rightIn, viewport, m);
 
-      auto pt = m * upt; 
-      auto vp = viewport.clipSpaceToViewport(pt);
-
-      ivec4 colour;
-      memcpy(&colour, &westIn[i+16], sizeof(ivec4));
-
-      // give point a square extent
-      auto sq = square(vp);
-
-
-      // clip the square to the tile, return true 
-      // if it needs to be copied to a different tile
-      auto dirs = sq.clip(tileBounds);
-
-      sq.colour = colour;
-      
-      for (auto i = sq.topleft.x; i < sq.bottomright.x; i++) {
-        for (auto j = sq.topleft.y; j < sq.bottomright.y; j++) {
-          auto index = toByteBufferIndex(i, j, tileBounds);
-          ivec4 c = {0.0f, 0.0f, 0.0f, 1.0f};
-          auto ce = glm::make_vec4(&localFb[index]);
-          c.x = ce.x + sq.colour.x;
-          c.y = ce.y + sq.colour.y;
-          c.z = ce.z + sq.colour.z;
-          memcpy(&localFb[index], &c2, sizeof(c2));
-        }
-      }
-
-      // // if the square needs to be copied to another tile, copy it
-      // if (dirs.E && squaresSent < eastOut.size()) {
-      //   memcpy(&eastOut[squaresSent], glm::value_ptr(upt), sizeof(upt));
-      //   ivec4 colour = {1.0f, 0.0f, 0.0f, 1.0f};
-      //   memcpy(&eastOut[squaresSent+16], &colour, sizeof(colour));
-      //   squaresSent+=sizeof(square);
-      // }
-    }
- 
     return true;
   }
  
