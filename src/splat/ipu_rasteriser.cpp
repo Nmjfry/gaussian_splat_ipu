@@ -268,76 +268,28 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   // 3. vertices (cs)
   // 4. program sequence
 
-  // EdgeBuilder edgeBuilder(vg, vertices, channelSize, fbMapping);
+  EdgeBuilder edgeBuilder(vg, vertices, channelSize, fbMapping);
   
-  // for (auto t = 0u; t < tm.size(); ++t) {
-  //   const auto& m = tm[t];
-  //   if (m.size() > 0u) {
-  //     // connects tiles that are adjacent to each other in the x and y directions
-  //     edgeBuilder.generateTileChannels(t);
-  //   }
-  // }
-
-  // for (auto t = 0u; t < tm.size(); ++t) {
-  //   const auto& m = tm[t];
-  //   if (m.size() > 0u) {
-  //     // connects tiles that are adjacent to each other in the x and y directions
-  //     edgeBuilder.generateLocalConnectivity(t);
-  //   }
-  // }
-  // // // this program sequence will copy the points between all the tiles in the graph
-  program::Sequence broadcastPoints;// = edgeBuilder.getConnectivity();
-
-  std::vector<poplar::Tensor> leftInChannels(tm.size());
-  std::vector<poplar::Tensor> rightOutChannels(tm.size());
-
-  std::vector<poplar::Tensor> rightInChannels(tm.size());
-  std::vector<poplar::Tensor> leftOutChannels(tm.size());
-
-  for (auto t = 0u; t < tm.size(); ++t) {
-    poplar::Tensor rightOut = vg.addVariable(FLOAT, {channelSize});
-    poplar::Tensor leftIn = vg.addVariable(FLOAT, {channelSize});
-
-    poplar::Tensor rightIn = vg.addVariable(FLOAT, {channelSize});
-    poplar::Tensor leftOut = vg.addVariable(FLOAT, {channelSize});
-
-    rightInChannels[t] = rightIn;
-    leftOutChannels[t] = leftOut;
-
-    leftInChannels[t] = leftIn;
-    rightOutChannels[t] = rightOut;
-
-    vg.setTileMapping(leftIn, t);
-    vg.setTileMapping(rightOut, t);
-
-    vg.setTileMapping(rightIn, t);
-    vg.setTileMapping(leftOut, t);
-  }
-
-  for (auto t = 0u; t < tm.size(); ++t) {
+  for (auto t = 0u; t < vertices.size(); ++t) {
     const auto& m = tm[t];
+    if (m.size() > 1u) {
+      throw std::runtime_error("Expected fb to be stored as a single contiguous region per tile.");
+    }
     if (m.size() > 0u) {
-      auto v = vertices[t];
-
-      auto leftIn = leftInChannels[t];
-      auto rightOut = rightOutChannels[t];
-      vg.connect(v["leftIn"], leftIn);
-      vg.connect(v["rightOut"], rightOut);
-      if (t > 0) {
-        auto eOut = rightOutChannels[t - 1];
-        broadcastPoints.add(program::Copy(eOut, leftIn));
+      if (t == 0) {
+        struct edgeDesc edge(socketDesc::getLeftSocket(), socketDesc::getRightSocket());
+        edgeBuilder.addBidirectionalEdge(t, vertices.size() - 1, edge);
       }
 
-      auto rightIn = rightInChannels[t];
-      auto leftOut = leftOutChannels[t];
-      vg.connect(v["rightIn"], rightIn);
-      vg.connect(v["leftOut"], leftOut);
-      if (t < fbMapping.numTiles) {
-        auto nOut = leftOutChannels[t + 1];
-        broadcastPoints.add(program::Copy(nOut, rightIn));
+      if (t < vertices.size() - 1) {
+        struct edgeDesc edge(socketDesc::getRightSocket(), socketDesc::getLeftSocket());
+        edgeBuilder.addBidirectionalEdge(t, t+1, edge);
       }
     }
   }
+ 
+  // this program sequence will copy the points between all the tiles in the graph
+  program::Sequence broadcastPoints = edgeBuilder.getBroadcastSequence();
 
   program::Sequence main;
   main.add(broadcastMvp);

@@ -6,11 +6,7 @@ namespace splat {
 
 EdgeBuilder::EdgeBuilder(poplar::Graph& vg, std::vector<poplar::VertexRef>& vertices, std::size_t channelSize, TiledFramebuffer& fb) 
                             : graph(vg), vertexRefs(vertices), channelSize(channelSize), fbMapping(fb) {
-    // Empty constructor
-    // tileChannels.resize(fbMapping.numTiles);
-    // for (auto i = 0; i < fbMapping.numTiles; i++) {
-    //     tileChannels[i].resize(fbMapping.numTiles);
-    // }
+
 }
 
 
@@ -35,72 +31,30 @@ std::pair<directions, directions> EdgeBuilder::getFreeNeighbouringEdges(unsigned
     return std::make_pair(availableInDirs, availableOutDirs);    
 }
 
-void EdgeBuilder::generateLocalConnectivity(unsigned tid) {
-    auto [inDirs, outDirs] = getFreeNeighbouringEdges(tid);
-    auto vertex = vertexRefs[tid];
+void EdgeBuilder::addBidirectionalEdge(unsigned tid1, unsigned tid2, struct edgeDesc edge) {
+    poplar::Tensor outT1 = graph.addVariable(poplar::FLOAT, {channelSize});
+    poplar::Tensor inT1 = graph.addVariable(poplar::FLOAT, {channelSize});
+    poplar::Tensor outT2 = graph.addVariable(poplar::FLOAT, {channelSize});
+    poplar::Tensor inT2 = graph.addVariable(poplar::FLOAT, {channelSize});
 
-    // if (outDirs.right) {
-    // printf("tid: %d, right\n", tid);
-    // auto westIn = tileInChannels[tid];
-    // auto eastOut = tileOutChannels[tid];
-    // graph.connect(vertex["westIn"], westIn);
-    // graph.connect(vertex["eastOut"], eastOut);
-    // if (tid > 0) {
-    //     auto eOut = tileOutChannels[tid - 1];
-    //     broadcastSequence.add(poplar::program::Copy(eOut, westIn));
-    // }
-    // // }
-}
+    graph.setTileMapping(outT1, tid1);
+    graph.setTileMapping(inT1, tid1);
+    graph.setTileMapping(outT2, tid2);
+    graph.setTileMapping(inT2, tid2);
 
-void EdgeBuilder::generateTileChannels() {
+    auto [out1, in1] = edge.t1;
+    auto [out2, in2] = edge.t2;
 
-    // for (auto i = 0; i < fbMapping.numTiles; i++) {
-    //     auto v = graph.addVariable(poplar::FLOAT, {channelSize});
-    //     graph.setTileMapping(v, tid);
-    // }
+    auto v1 = vertexRefs[tid1];
+    graph.connect(v1[in1], inT1);
+    graph.connect(v1[out1], outT1);
 
-    // auto eastOut = graph.addVariable(poplar::FLOAT, {channelSize});
-    // auto westIn = graph.addVariable(poplar::FLOAT, {channelSize});
-    // graph.setTileMapping(westIn, tid);
-    // graph.setTileMapping(eastOut, tid);
-    // tileInChannels[tid] = westIn;
-    // tileOutChannels[tid] = eastOut;
+    auto v2 = vertexRefs[tid2];
+    graph.connect(v2[in2], inT2);
+    graph.connect(v2[out2], outT2);
 
-    // if (outDirs.left) {
-    //     auto westOut = vg.addVariable(FLOAT, {channelSize});
-    //     auto eastIn = vg.addVariable(FLOAT, {channelSize});
-    //     vg.setTileMapping(westOut, tid);
-    //     vg.setTileMapping(eastIn, tid - 1);
-    //     vg.connect(vertex["westOut"], westOut);
-    //     vg.connect(vertex["eastIn"], eastIn);
-    // }
-    // if (outDirs.down) {
-    //     auto southOut = vg.addVariable(FLOAT, {channelSize});
-    //     auto northIn = vg.addVariable(FLOAT, {channelSize});
-    //     vg.setTileMapping(southOut, tid);
-    //     vg.setTileMapping(northIn, tid + fbMapping.numTilesAcross);
-    //     vg.connect(vertex["southOut"], southOut);
-    //     vg.connect(vertex["northIn"], northIn);
-    // }
-    // if (outDirs.up) {
-    //     auto northOut = vg.addVariable(FLOAT, {channelSize});
-    //     auto southIn = vg.addVariable(FLOAT, {channelSize});
-    //     vg.setTileMapping(northOut, tid);
-    //     vg.setTileMapping(southIn, tid - fbMapping.numTilesAcross);
-    //     vg.connect(vertex["northOut"], northOut);
-    //     vg.connect(vertex["southIn"], southIn);
-    // }
-
-}
-
-
-
-void EdgeBuilder::addLocalOutEdges(unsigned tid, directions dirs) {
-    // Empty function
-}
-
-void EdgeBuilder::addLocalInEdges(unsigned tid, directions dirs) {
-    // Empty function
+    broadcastSequence.add(poplar::program::Copy(outT1, inT2));
+    broadcastSequence.add(poplar::program::Copy(outT2, inT1));
 }
 
 } // end of namespace splat

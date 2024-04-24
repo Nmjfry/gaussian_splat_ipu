@@ -6,8 +6,39 @@
 #include <ipu/ipu_utils.hpp>
 #include <poputil/TileMapping.hpp>
 #include <tileMapping/tile_config.hpp>
+#include <string>
+#include <queue>
 
 namespace splat {
+
+struct socketDesc {
+    std::string in;
+    std::string out;
+
+    socketDesc(std::string in, std::string out) : in(in), out(out) {}
+
+    static struct socketDesc getLeftSocket() {
+      return {"leftOut", "leftIn"};
+    }
+    static struct socketDesc getRightSocket() {
+      return {"rightOut", "rightIn"};
+    }
+    static struct socketDesc getUpSocket() {
+      return {"upOut", "upIn"};
+    }
+    static struct socketDesc getDownSocket() {
+      return {"downOut", "downIn"};
+    }
+};
+
+
+
+struct edgeDesc {
+    struct socketDesc t1;
+    struct socketDesc t2;
+
+    edgeDesc(struct socketDesc t1, struct socketDesc t2) : t1(t1), t2(t2) {}
+};
 
 class EdgeBuilder{
 public:
@@ -15,13 +46,9 @@ public:
   virtual ~EdgeBuilder() {}
 
   std::pair<directions, directions> getFreeNeighbouringEdges(unsigned tid);
-  void addLocalOutEdges(unsigned tid, directions dirs);
-  void addLocalInEdges(unsigned tid, directions dirs);
-  void generateLocalConnectivity(unsigned tid); 
-  void generateTileChannels();
-  poplar::program::Sequence getConnectivity() {
-    return broadcastSequence;
-  }
+  
+  void addBidirectionalEdge(unsigned tid1, unsigned tid2, struct edgeDesc edge);
+  poplar::program::Sequence getBroadcastSequence() { return broadcastSequence; }
 
 private:
     poplar::Graph& graph;
@@ -31,9 +58,9 @@ private:
     TiledFramebuffer& fbMapping;
     // keeps a record of the edges that have been added <tileID, <directions>>
     std::unordered_map<unsigned, std::pair<directions, directions>> existingEdges;
-    poplar::program::Sequence broadcastSequence;
 
     std::vector<std::vector<poplar::Tensor>> tileChannels;
+    poplar::program::Sequence broadcastSequence;
 
 };
 
