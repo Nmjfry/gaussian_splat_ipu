@@ -73,6 +73,7 @@ public:
   void pack(poplar::Vector<float> &buffer, unsigned idx, struct square sq) {
     memcpy(&buffer[idx], &sq, sizeof(sq.centre));
     memcpy(&buffer[idx+sizeof(sq.centre)], &sq.colour, sizeof(sq.colour));
+    memcpy(&buffer[idx+sizeof(sq.centre)+sizeof(sq.colour)], &sq.gid, sizeof(sq.gid));
   }
 
   square unpack(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx) {
@@ -82,8 +83,11 @@ public:
     glm::vec4 upt = glm::vec4(centre.x, centre.y, centre.z, centre.w);
     ivec4 colour;
     memcpy(&colour, &buffer[idx+sizeof(centre)], sizeof(colour));
+
     sq.centre = centre;
     sq.colour = colour;
+    sq.gid = colour.w;
+    
     return sq;
   }
 
@@ -92,6 +96,10 @@ public:
       auto black = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
       memcpy(&localFb[i], glm::value_ptr(black), sizeof(black));
     }
+    squaresSentRight = 0;
+    squaresSentLeft = 0;
+    squaresSentUp = 0;
+    squaresSentDown = 0;
   }
 
   void send(directions dirs, struct square sq, glm::vec4 upt) {
@@ -126,6 +134,10 @@ public:
     for (auto i = 0; i < bufferIn.size(); i+=sizeof(square)) {
       struct square sq = unpack(bufferIn, i);
 
+      if (sq.gid == 0) {
+        break;
+      }
+
       auto upt = glm::vec4(sq.centre.x, sq.centre.y, sq.centre.z, sq.centre.w);
 
       auto pt = m * upt; 
@@ -139,28 +151,33 @@ public:
       // if it needs to be copied to a different tile
       auto dirs = sq.clip(tileBounds);
       splat(sq, tileBounds);
-
       send(dirs, sq, upt);
     }
   }
 
   bool compute(unsigned workerId) {
 
+    if (workerId != 0) {
+      return true;
+    }
+
     // Transpose because GLM storage order is column major:
     const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
     TiledFramebuffer viewport(IPU_TILEWIDTH, IPU_TILEHEIGHT);
     auto tileBounds = viewport.getTileBounds(tile_id[0]);
+
     float tid_c = tile_id[0] * (1.0f / viewport.numTiles);
     ivec4 tidColour = {1.0f, 0.0f, tid_c, 1.0f};
-    // zero the framebuffer
-    clearFb();
 
-    squaresSentRight = 0;
-    squaresSentLeft = 0;
-    squaresSentUp = 0;
-    squaresSentDown = 0;
-    
-    // loop over the vertices originally stored on this tile
+    // zero the framebuffer and clear the send buffers
+    clearFb();
+        
+    recieveFromBuffer(leftIn, viewport, m);
+    recieveFromBuffer(rightIn, viewport, m);
+    recieveFromBuffer(upIn, viewport, m);
+    recieveFromBuffer(downIn, viewport, m);
+
+     // loop over the vertices originally stored on this tile
     for (auto i = 0; i < vertsIn.size(); i+=4) {
       struct square sq;
 
@@ -177,15 +194,11 @@ public:
       // if it needs to be copied to a different direction
       auto dirs = sq.clip(tileBounds);
       splat(sq, tileBounds);
-
       sq.colour = tidColour;
+      sq.colour.w = (i/4)+1+tile_id[0];
       send(dirs, sq, upt);
     }
 
-    recieveFromBuffer(leftIn, viewport, m);
-    recieveFromBuffer(rightIn, viewport, m);
-    recieveFromBuffer(upIn, viewport, m);
-    recieveFromBuffer(downIn, viewport, m);
 
     return true;
   }
