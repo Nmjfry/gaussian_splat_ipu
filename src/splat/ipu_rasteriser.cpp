@@ -242,7 +242,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   const auto tm = vg.getTileMapping(paddedInput);
   const auto tmFb = vg.getTileMapping(paddedFramebuffer);
 
-  unsigned numPoints = 400;
+  unsigned numPoints = 100;
   std::size_t channelSize = numPoints * sizeof(struct square);
 
   std::vector<poplar::VertexRef> vertices;
@@ -284,8 +284,6 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
   EdgeBuilder edgeBuilder(vg, vertices, channelSize, fbMapping);
 
-  std::unordered_map<unsigned, std::vector<struct edge>> edges;
-  
   for (auto t = 0u; t < vertices.size(); ++t) {
     const auto& m = tm[t];
     if (m.size() > 1u) {
@@ -296,51 +294,48 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
       struct edge r2l("rightOut", "leftIn"); // -->
       struct edge l2r("leftOut", "rightIn"); // <--
-      struct edge l2l("leftOut", "leftIn"); // <--
-      struct edge r2r("rightOut", "rightIn"); // -->
 
-      // printf("Tile %d\n", t);
+      struct edge l2l("leftOut", "leftIn"); // <->
+      struct edge r2r("rightOut", "rightIn"); // >-<
+
+      struct edge u2d("upOut", "downIn");
+      struct edge d2u("downOut", "upIn");
+      
+      struct edge u2u("upOut", "upIn");
+      struct edge d2d("downOut", "downIn");
+
+      if (tileOnBoundary.up) {
+        edgeBuilder.addEdge(t, t, u2u);
+      }
 
       if (tileOnBoundary.left) {
-        // printf("connecting %d to %d\n", t, t);
-        // printf("Edge: %s -> %s\n", l2l.src.c_str(), l2l.dst.c_str());
         edgeBuilder.addEdge(t, t, l2l);
       }
-      
+
       if (tileOnBoundary.right) {
-        // printf("connecting %d to %d\n", t, t);
-        // printf("Edge: %s -> %s\n", r2r.src.c_str(), r2r.dst.c_str());
         edgeBuilder.addEdge(t, t, r2r);
-        continue;
       }
 
-      if (t < vertices.size() - 1) {
-        // printf("connecting %d to %d\n", t, t+1);
-        // printf("Edge: %s -> %s\n", r2l.src.c_str(), r2l.dst.c_str());
+      if (tileOnBoundary.down) {
+        edgeBuilder.addEdge(t, t, d2d);
+      }
+
+      if (!tileOnBoundary.right && t + 1 < vertices.size()) {
         edgeBuilder.addEdge(t, t + 1, r2l);
-
-        // printf("connecting %d to %d\n", t+1, t);
-        // printf("Edge: %s -> %s\n", l2r.src.c_str(), l2r.dst.c_str());
         edgeBuilder.addEdge(t + 1, t, l2r);
-
-        // printf("\n");
-      } else {
+      } else if (!tileOnBoundary.right) {
         edgeBuilder.addEdge(t, t, r2r);
       }
 
-
+      if (!tileOnBoundary.down && t + fbMapping.numTilesAcross < vertices.size()) {
+        edgeBuilder.addEdge(t, t + fbMapping.numTilesAcross, d2u);
+        edgeBuilder.addEdge(t + fbMapping.numTilesAcross, t, u2d);
+      } else if (!tileOnBoundary.down) {
+        edgeBuilder.addEdge(t, t, d2d);
+      }
     }
   }
 
-  for (auto [key, value] : edges) {
-    printf("Tile %d\n", key);
-    printf("Edges: %lu\n", value.size());
-    for (auto edge : value) {
-      printf("Edge: %s -> %s\n", edge.src.c_str(), edge.dst.c_str());
-    }
-    printf("\n");
-  }
- 
   // this program sequence will copy the points between all the tiles in the graph
   program::Sequence broadcastPoints = edgeBuilder.getBroadcastSequence();
 

@@ -30,20 +30,21 @@ public:
   poplar::Output<poplar::Vector<float>> localFb;
   poplar::Input<poplar::Vector<int>> tile_id;
 
-  poplar::Input<poplar::Vector<float>> leftIn; 
+  poplar::Input<poplar::Vector<float>> rightIn;
   poplar::Output<poplar::Vector<float>> rightOut;
   unsigned squaresSentRight = 0;
 
-  poplar::Input<poplar::Vector<float>> rightIn;
+  poplar::Input<poplar::Vector<float>> leftIn; 
   poplar::Output<poplar::Vector<float>> leftOut;
   unsigned squaresSentLeft = 0;
 
+  poplar::Input<poplar::Vector<float>> upIn;
+  poplar::Output<poplar::Vector<float>> upOut;
+  unsigned squaresSentUp = 0;
 
-  // poplar::Input<poplar::Vector<float>> northIn;
-  // poplar::Output<poplar::Vector<float>> northOut;
-
-  // poplar::Input<poplar::Vector<float>> southIn;
-  // poplar::Output<poplar::Vector<float>> southOut;
+  poplar::Input<poplar::Vector<float>> downIn;
+  poplar::Output<poplar::Vector<float>> downOut;
+  unsigned squaresSentDown = 0;
 
   int toByteBufferIndex(float x, float y, std::pair<glm::vec2, glm::vec2> tileBounds) {
     return int(floor(x - tileBounds.first.x) + floor(y - tileBounds.first.y) * IPU_TILEWIDTH) * 4;
@@ -124,6 +125,18 @@ public:
         pack(leftOut, squaresSentLeft, sq);
         squaresSentLeft+=sizeof(square);
       }
+
+      if (dirs.up && squaresSentUp < upOut.size()) {
+        sq.centre = {upt.x, upt.y, upt.z, upt.w};
+        pack(upOut, squaresSentUp, sq);
+        squaresSentUp+=sizeof(square);
+      }
+
+      if (dirs.down && squaresSentDown < downOut.size()) {
+        sq.centre = {upt.x, upt.y, upt.z, upt.w};
+        pack(downOut, squaresSentDown, sq);
+        squaresSentDown+=sizeof(square);
+      }
     }
   }
 
@@ -173,10 +186,27 @@ public:
         pack(leftOut, squaresSentLeft, sq);
         squaresSentLeft+=sizeof(square);
       }
+
+      if (dirs.up && squaresSentUp < upOut.size()) {
+        sq.centre = {upt.x, upt.y, upt.z, upt.w};
+        sq.colour = tidColour;
+        pack(upOut, squaresSentUp, sq);
+        squaresSentUp+=sizeof(square);
+      }
+
+      if (dirs.down && squaresSentDown < downOut.size()) {
+        sq.centre = {upt.x, upt.y, upt.z, upt.w};
+        sq.colour = tidColour;
+        pack(downOut, squaresSentDown, sq);
+        squaresSentDown+=sizeof(square);
+      }
+      
     }
 
     recieveFromBuffer(leftIn, viewport, m);
     recieveFromBuffer(rightIn, viewport, m);
+    recieveFromBuffer(upIn, viewport, m);
+    recieveFromBuffer(downIn, viewport, m);
 
     return true;
   }
