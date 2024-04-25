@@ -212,6 +212,20 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   // tiles). If we use the AMP we need to have at least 8 4-vectors to fill the AMP pipeline so
   // the minimum grain size is 32:
   const auto grainSize = 4; //disableAMPVertices ? 4 : 4 * 8;
+
+  // MappingInfo{padding, std::size_t(elementsPerTile), std::size_t(fullTiles)};
+
+
+  auto numElemsPerTile = std::floor(hostVertices.size() / fbMapping.numTiles); // lower bound
+  auto remainingElements = hostVertices.size() - (numElemsPerTile * fbMapping.numTiles);
+  auto paddedRemainder = std::ceil(remainingElements / grainSize) * grainSize;
+  auto padding = paddedRemainder - remainingElements;
+
+  printf("numElemsPerTile: %f, remainingElements : %f, padding: %f\n", numElemsPerTile, remainingElements, padding);
+  // auto mapping = MappingInfo{std::size_t(padding), std::size_t(numElemsPerTile), std::size_t(fbMapping.numTiles)};
+  
+  // mapping.totalTiles = mapping.totalTiles > 1439 ? 1439 : mapping.totalTiles;
+
   auto mapping = calculateMapping(vg, hostVertices.size(), grainSize, fbMapping);
   printf("Vertex layout: %lu, %lu, %lu\n", mapping.padding, mapping.elementsPerTile, mapping.totalTiles);
   auto paddedInput = vg.addVariable(FLOAT, {hostVertices.size() + mapping.padding}, "padded_verts_in");
@@ -269,6 +283,8 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   // 4. program sequence
 
   EdgeBuilder edgeBuilder(vg, vertices, channelSize, fbMapping);
+
+  std::unordered_map<unsigned, std::vector<struct edge>> edges;
   
   for (auto t = 0u; t < vertices.size(); ++t) {
     const auto& m = tm[t];
@@ -276,16 +292,53 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       throw std::runtime_error("Expected fb to be stored as a single contiguous region per tile.");
     }
     if (m.size() > 0u) {
-      if (t == 0) {
-        struct edgeDesc edge(socketDesc::getLeftSocket(), socketDesc::getRightSocket());
-        edgeBuilder.addBidirectionalEdge(t, vertices.size() - 1, edge);
+      auto tileOnBoundary = fbMapping.checkImageBoundaries(t);
+
+      struct edge r2l("rightOut", "leftIn"); // -->
+      struct edge l2r("leftOut", "rightIn"); // <--
+      struct edge l2l("leftOut", "leftIn"); // <--
+      struct edge r2r("rightOut", "rightIn"); // -->
+
+      // printf("Tile %d\n", t);
+
+      if (tileOnBoundary.left) {
+        // printf("connecting %d to %d\n", t, t);
+        // printf("Edge: %s -> %s\n", l2l.src.c_str(), l2l.dst.c_str());
+        edgeBuilder.addEdge(t, t, l2l);
+      }
+      
+      if (tileOnBoundary.right) {
+        // printf("connecting %d to %d\n", t, t);
+        // printf("Edge: %s -> %s\n", r2r.src.c_str(), r2r.dst.c_str());
+        edgeBuilder.addEdge(t, t, r2r);
+        continue;
       }
 
       if (t < vertices.size() - 1) {
-        struct edgeDesc edge(socketDesc::getRightSocket(), socketDesc::getLeftSocket());
-        edgeBuilder.addBidirectionalEdge(t, t+1, edge);
+        // printf("connecting %d to %d\n", t, t+1);
+        // printf("Edge: %s -> %s\n", r2l.src.c_str(), r2l.dst.c_str());
+        edgeBuilder.addEdge(t, t + 1, r2l);
+
+        // printf("connecting %d to %d\n", t+1, t);
+        // printf("Edge: %s -> %s\n", l2r.src.c_str(), l2r.dst.c_str());
+        edgeBuilder.addEdge(t + 1, t, l2r);
+
+        // printf("\n");
+      } else {
+        edgeBuilder.addEdge(t, t, r2r);
       }
+
+
     }
+  }
+
+  for (auto [key, value] : edges) {
+    printf("Tile %d\n", key);
+    printf("Edges: %lu\n", value.size());
+    for (auto edge : value) {
+      printf("Edge: %s -> %s\n", edge.src.c_str(), edge.dst.c_str());
+    }
+    printf("\n");
   }
  
   // this program sequence will copy the points between all the tiles in the graph

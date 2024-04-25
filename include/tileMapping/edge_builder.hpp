@@ -31,8 +31,6 @@ struct socketDesc {
     }
 };
 
-
-
 struct edgeDesc {
     struct socketDesc t1;
     struct socketDesc t2;
@@ -40,14 +38,21 @@ struct edgeDesc {
     edgeDesc(struct socketDesc t1, struct socketDesc t2) : t1(t1), t2(t2) {}
 };
 
+struct edge {
+  std::string src;
+  std::string dst;
+  edge(std::string src, std::string dst) : src(src), dst(dst) {}
+};
+
 class EdgeBuilder{
 public:
   EdgeBuilder(poplar::Graph& vg, std::vector<poplar::VertexRef>& vertices, std::size_t channelSize, TiledFramebuffer& fb);
   virtual ~EdgeBuilder() {}
 
-  std::pair<directions, directions> getFreeNeighbouringEdges(unsigned tid);
+  // std::pair<directions, directions> getFreeNeighbouringEdges(unsigned tid);
   
-  void addBidirectionalEdge(unsigned tid1, unsigned tid2, struct edgeDesc edge);
+  void addBidirectionalEdge(unsigned tid1, unsigned tid2, struct edge e1, struct edge e2);
+  void addEdge(unsigned tid1, unsigned tid2, struct edge edge);
   poplar::program::Sequence getBroadcastSequence() { return broadcastSequence; }
 
 private:

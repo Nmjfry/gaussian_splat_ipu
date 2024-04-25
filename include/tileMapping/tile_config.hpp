@@ -137,10 +137,10 @@ public:
     directions dirs;
     auto [tl, br] = getTileBounds(tid);
 
-    dirs.left = tl.x > 0;
-    dirs.up = tl.y > 0;
-    dirs.right = br.x < width;
-    dirs.down = br.y < height;
+    dirs.left = tl.x < 1;
+    dirs.up = tl.y < 1;
+    dirs.right = br.x > width - 1;
+    dirs.down = br.y > height - 1;
 
     return dirs;
   }
