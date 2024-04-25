@@ -94,6 +94,32 @@ public:
     }
   }
 
+  void send(directions dirs, struct square sq, glm::vec4 upt) {
+    if (dirs.right && squaresSentRight < rightOut.size()) {
+      sq.centre = {upt.x, upt.y, upt.z, upt.w};
+      pack(rightOut, squaresSentRight, sq);
+      squaresSentRight+=sizeof(square);
+    }
+
+    if (dirs.left && squaresSentLeft < leftOut.size()) {
+      sq.centre = {upt.x, upt.y, upt.z, upt.w};
+      pack(leftOut, squaresSentLeft, sq);
+      squaresSentLeft+=sizeof(square);
+    }
+
+    if (dirs.up && squaresSentUp < upOut.size()) {
+      sq.centre = {upt.x, upt.y, upt.z, upt.w};
+      pack(upOut, squaresSentUp, sq);
+      squaresSentUp+=sizeof(square);
+    }
+
+    if (dirs.down && squaresSentDown < downOut.size()) {
+      sq.centre = {upt.x, upt.y, upt.z, upt.w};
+      pack(downOut, squaresSentDown, sq);
+      squaresSentDown+=sizeof(square);
+    }
+  }
+
   void recieveFromBuffer(poplar::Input<poplar::Vector<float>> &bufferIn, TiledFramebuffer &viewport, const glm::mat4 &m) {
     auto tileBounds = viewport.getTileBounds(tile_id[0]);
 
@@ -114,29 +140,7 @@ public:
       auto dirs = sq.clip(tileBounds);
       splat(sq, tileBounds);
 
-      if (dirs.right && squaresSentRight < rightOut.size()) {
-        sq.centre = {upt.x, upt.y, upt.z, upt.w};
-        pack(rightOut, squaresSentRight, sq);
-        squaresSentRight+=sizeof(square);
-      }
-
-      if (dirs.left && squaresSentLeft < leftOut.size()) {
-        sq.centre = {upt.x, upt.y, upt.z, upt.w};
-        pack(leftOut, squaresSentLeft, sq);
-        squaresSentLeft+=sizeof(square);
-      }
-
-      if (dirs.up && squaresSentUp < upOut.size()) {
-        sq.centre = {upt.x, upt.y, upt.z, upt.w};
-        pack(upOut, squaresSentUp, sq);
-        squaresSentUp+=sizeof(square);
-      }
-
-      if (dirs.down && squaresSentDown < downOut.size()) {
-        sq.centre = {upt.x, upt.y, upt.z, upt.w};
-        pack(downOut, squaresSentDown, sq);
-        squaresSentDown+=sizeof(square);
-      }
+      send(dirs, sq, upt);
     }
   }
 
@@ -153,6 +157,8 @@ public:
 
     squaresSentRight = 0;
     squaresSentLeft = 0;
+    squaresSentUp = 0;
+    squaresSentDown = 0;
     
     // loop over the vertices originally stored on this tile
     for (auto i = 0; i < vertsIn.size(); i+=4) {
@@ -172,35 +178,8 @@ public:
       auto dirs = sq.clip(tileBounds);
       splat(sq, tileBounds);
 
-      // if the square needs to be copied to another tile, copy it
-      if (dirs.right && squaresSentRight < rightOut.size()) {
-        sq.centre = {upt.x, upt.y, upt.z, upt.w};
-        sq.colour = tidColour;
-        pack(rightOut, squaresSentRight, sq);
-        squaresSentRight+=sizeof(square);
-      }
-
-      if (dirs.left && squaresSentLeft < leftOut.size()) {
-        sq.centre = {upt.x, upt.y, upt.z, upt.w};
-        sq.colour = tidColour;
-        pack(leftOut, squaresSentLeft, sq);
-        squaresSentLeft+=sizeof(square);
-      }
-
-      if (dirs.up && squaresSentUp < upOut.size()) {
-        sq.centre = {upt.x, upt.y, upt.z, upt.w};
-        sq.colour = tidColour;
-        pack(upOut, squaresSentUp, sq);
-        squaresSentUp+=sizeof(square);
-      }
-
-      if (dirs.down && squaresSentDown < downOut.size()) {
-        sq.centre = {upt.x, upt.y, upt.z, upt.w};
-        sq.colour = tidColour;
-        pack(downOut, squaresSentDown, sq);
-        squaresSentDown+=sizeof(square);
-      }
-      
+      sq.colour = tidColour;
+      send(dirs, sq, upt);
     }
 
     recieveFromBuffer(leftIn, viewport, m);
