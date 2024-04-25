@@ -160,7 +160,7 @@ public:
   unsigned tid;
 };
 
-#define EXTENT 10.0f
+#define EXTENT 15.0f
 
 struct square {
   ivec4 centre;
@@ -178,24 +178,31 @@ struct square {
     bottomright = glm::vec2(centre.x + (EXTENT / 2.0f), centre.y + (EXTENT / 2.0f));
   }
 
+  bool isOnTile(glm::vec2 pos, glm::vec2 tl, glm::vec2 br) {
+    return pos.x >= tl.x && pos.x <= br.x && pos.y >= tl.y && pos.y <= br.y;
+  }
+
   directions clip(std::pair<glm::vec2, glm::vec2> tileBounds) {
     directions dirs;
     auto [tl, br] = tileBounds;
-    if (topleft.x < tl.x) {
+
+    dirs.left = topleft.x < tl.x;
+    dirs.up = topleft.y < tl.y;
+    dirs.right = bottomright.x >= br.x;
+    dirs.down = bottomright.y >= br.y;
+    dirs.keep = isOnTile(topleft, tl, br) || isOnTile(bottomright, tl, br);
+
+    if (dirs.left) {
       topleft.x = tl.x;
-      dirs.left = true;
     }
-    if (topleft.y < tl.y) {
+    if (dirs.up) {
       topleft.y = tl.y;
-      dirs.up = true;
     }
-    if (bottomright.x >= br.x) {
+    if (dirs.right) {
       bottomright.x = br.x;
-      dirs.right = true;
     }
-    if (bottomright.y >= br.y) {
+    if (dirs.down) {
       bottomright.y = br.y;
-      dirs.down = true;
     }
     return dirs;
   }

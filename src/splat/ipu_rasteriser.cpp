@@ -266,12 +266,17 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
       auto sliceFb = paddedFramebuffer.slice(mFb.front());
 
+      poplar::Tensor squares = graph.addVariable(poplar::FLOAT, {channelSize});
+
+      vg.setTileMapping(squares, t);
+
       auto v = vg.addVertex(splatCs, "Transform4x4");
       vg.setTileMapping(v, t);
       vg.connect(v["matrix"], localMvp.flatten());
       vg.connect(v["vertsIn"], ptsIn);
       vg.connect(v["localFb"], sliceFb);
       vg.connect(v["tile_id"], tid);
+      vg.connect(v["squares"], squares);
       vertices.push_back(v);
     }
   }

@@ -46,13 +46,12 @@ public:
   poplar::Output<poplar::Vector<float>> downOut;
   unsigned squaresSentDown = 0;
 
+  poplar::InOut<poplar::Vector<float>> squares;
+  unsigned squaresRecieved = 0;
+
   int toByteBufferIndex(float x, float y, std::pair<glm::vec2, glm::vec2> tileBounds) {
     return int(floor(x - tileBounds.first.x) + floor(y - tileBounds.first.y) * IPU_TILEWIDTH) * 4;
   } 
-
-  bool isWithinTile(float x, float y, std::pair<glm::vec2, glm::vec2> tileBounds) {
-    return x >= tileBounds.first.x && x < tileBounds.second.x && y >= tileBounds.first.y && y < tileBounds.second.y;
-  }
 
   ivec4 getPixel(int idx) {
     ivec4 pixel;
@@ -126,6 +125,11 @@ public:
       pack(downOut, squaresSentDown, sq);
       squaresSentDown+=sizeof(square);
     }
+    
+    if (dirs.keep && squaresRecieved < squares.size()) {
+      pack(squares, squaresRecieved, sq);
+      squaresRecieved+=sizeof(square);
+    }
   }
 
   void recieveFromBuffer(poplar::Input<poplar::Vector<float>> &bufferIn, TiledFramebuffer &viewport, const glm::mat4 &m) {
@@ -161,13 +165,14 @@ public:
       return true;
     }
 
+
     // Transpose because GLM storage order is column major:
     const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
     TiledFramebuffer viewport(IPU_TILEWIDTH, IPU_TILEHEIGHT);
     auto tileBounds = viewport.getTileBounds(tile_id[0]);
 
     float tid_c = tile_id[0] * (1.0f / viewport.numTiles);
-    ivec4 tidColour = {1.0f, 0.0f, tid_c, 1.0f};
+    ivec4 tidColour = {1.0f, 0.0f, tid_c, 0.0f};
 
     // zero the framebuffer and clear the send buffers
     clearFb();
