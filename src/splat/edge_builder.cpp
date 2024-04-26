@@ -4,38 +4,13 @@
 
 namespace splat {
 
-EdgeBuilder::EdgeBuilder(poplar::Graph& vg, std::vector<poplar::VertexRef>& vertices, std::size_t channelSize, TiledFramebuffer& fb) 
-                            : graph(vg), vertexRefs(vertices), channelSize(channelSize), fbMapping(fb) {
-
-}
-
-
-// std::pair<directions, directions> EdgeBuilder::getFreeNeighbouringEdges(unsigned tid) {
-//     directions availableInDirs = fbMapping.checkImageBoundaries(tid);
-//     directions availableOutDirs = availableInDirs;
-
-//     auto unsetUsedDirs = [](directions& dirs, directions existingDirs) {
-//         dirs.left = dirs.left && !existingDirs.left;
-//         dirs.up = dirs.up && !existingDirs.up;
-//         dirs.right = dirs.right && !existingDirs.right;
-//         dirs.down = dirs.down && !existingDirs.down;
-//     };
-
-//     if (existingEdges.find(tid) != existingEdges.end()) {
-//         // if the edge has already been added, remove it from the available directions
-//         auto [inDirs, outDirs] = existingEdges[tid];
-//         unsetUsedDirs(availableInDirs, inDirs);
-//         unsetUsedDirs(availableOutDirs, outDirs);
-//     }
-
-//     return std::make_pair(availableInDirs, availableOutDirs);    
-// }
+EdgeBuilder::EdgeBuilder(poplar::Graph& vg, std::vector<poplar::VertexRef>& vertices, std::size_t channelSize) 
+                            : graph(vg), vertexRefs(vertices), channelSize(channelSize) {}
 
 void EdgeBuilder::addBidirectionalEdge(unsigned tid1, unsigned tid2, struct edge e1, struct edge e2) {
     addEdge(tid1, tid2, e1);
     addEdge(tid2, tid1, e2);
 }
-
 
 void EdgeBuilder::addEdge(unsigned tid1, unsigned tid2, struct edge edge) {
     poplar::Tensor outT1 = graph.addVariable(poplar::FLOAT, {channelSize});
