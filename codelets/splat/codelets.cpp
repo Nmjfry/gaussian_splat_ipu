@@ -166,19 +166,32 @@ public:
       pack(downOut, squaresSentDown, sq);
       squaresSentDown+=sizeof(square);
     }
+
+    auto hasCopy = [this](struct square& sq, poplar::Input<poplar::Vector<float>> &buffer) {
+      for (auto i = 0; i + sizeof(square) < buffer.size(); i+=sizeof(square)) {
+        struct square sq2 = unpack(buffer, i);
+        if (sq2.gid == 0) {
+          return false;
+        }
+        if (sq2.gid == sq.gid) {
+          return true;
+        }
+      }
+      return false;
+    };
           
-    if (dirs.keep && squaresRecieved < squares.size()) {
+    if (dirs.keep && squaresRecieved < squares.size() && !hasCopy(sq, squares)) {
       pack(squares, squaresRecieved, sq);
       squaresRecieved+=sizeof(square);
     }
 
-    if (dirs.keep && gidsSent >= vertsIn.size() && squaresRecieved2 + sizeof(square) < vertsIn.size()) {
+    if (dirs.keep && gidsSent >= vertsIn.size() && squaresRecieved2 + sizeof(square) < vertsIn.size() && !hasCopy(sq, vertsIn)) {
       pack(vertsIn, squaresRecieved2, sq);
       squaresRecieved2+=sizeof(square);
     }
   }
 
-  void recieveFromBuffer(poplar::Input<poplar::Vector<float>> &bufferIn, ivec2& tlBound, ivec2& brBound, TiledFramebuffer& fbMapping) {
+  void readBuffer(poplar::Input<poplar::Vector<float>> &bufferIn, ivec2& tlBound, ivec2& brBound, TiledFramebuffer& fbMapping) {
     const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
 
     for (auto i = 0; i < bufferIn.size(); i+=sizeof(square)) {
@@ -225,12 +238,13 @@ public:
 
     auto [tlBound, brBound] = fbMapping.getTileBounds(tile_id[0]);
 
-    recieveFromBuffer(rightIn, tlBound, brBound, fbMapping);
-    recieveFromBuffer(leftIn, tlBound, brBound, fbMapping);
-    recieveFromBuffer(upIn, tlBound, brBound, fbMapping);
-    recieveFromBuffer(downIn, tlBound, brBound, fbMapping);
-    recieveFromBuffer(squares, tlBound, brBound, fbMapping);
-    recieveFromBuffer(vertsIn, tlBound, brBound, fbMapping);
+    readBuffer(rightIn, tlBound, brBound, fbMapping);
+    readBuffer(leftIn, tlBound, brBound, fbMapping);
+    readBuffer(upIn, tlBound, brBound, fbMapping);
+    readBuffer(downIn, tlBound, brBound, fbMapping);
+
+    readBuffer(squares, tlBound, brBound, fbMapping);
+    readBuffer(vertsIn, tlBound, brBound, fbMapping);
 
     return true;
   }
