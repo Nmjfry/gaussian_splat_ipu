@@ -150,7 +150,7 @@ public:
   unsigned tid;
 };
 
-#define EXTENT 15.0f
+#define EXTENT 10.0f
 
 struct square {
   ivec4 centre;
