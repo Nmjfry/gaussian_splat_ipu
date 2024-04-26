@@ -30,10 +30,12 @@ struct ivec4 {
 
 typedef struct ivec4 ivec4;
 
-typedef struct {
+struct ivec2 {
   float x;
   float y;
-} ivec2;
+};
+
+typedef struct ivec2 ivec2;
 
 enum class Direction {
   UP,
@@ -99,18 +101,6 @@ public:
     return viewportTransform(vp);
   }
 
-  // Converts from window coordinates to local tile coordinates:
-  glm::vec2 viewportToTile(glm::vec2 windowCoords, unsigned tid) const {
-    const auto [tl, br] = getTileBounds(tid);
-    return glm::vec2(floor(windowCoords.x - tl.x), floor(windowCoords.y - tl.y));
-  }
-
-  // Converts from clip space to tile coordinates:
-  glm::vec2 clipSpaceToTile(glm::vec4 cs, unsigned tid) const {
-    glm::vec2 vp = clipSpaceToViewport(cs);
-    return viewportToTile(vp, tid);
-  }
-
   // Converts from normalised screen coords to the specified view window:
   glm::vec2 viewportTransform(glm::vec2 v) const {
     v.x *= spec[2];
@@ -121,11 +111,11 @@ public:
   }
 
   // Compute the tile's positition for a given tile index:
-  std::pair<glm::vec2, glm::vec2> getTileBounds(unsigned tid) const {
+  std::pair<ivec2, ivec2> getTileBounds(unsigned tid) const {
     auto div = floor(tid / numTilesAcross);
     auto mod = tid - div * numTilesAcross;
-    glm::vec2 tl;
-    glm::vec2 br;
+    ivec2 tl;
+    ivec2 br;
     tl.x = floor(mod * tileWidth);
     tl.y = floor(div * tileHeight);
     br.x = tl.x + tileWidth;
@@ -166,44 +156,33 @@ struct square {
   ivec4 centre;
   ivec4 colour;
   unsigned gid;
-  glm::vec2 topleft;
-  glm::vec2 bottomright;
 
-  square() {
-    colour = {0, 1.0f, 0, 0};
+  static bool isOnTile(ivec2 pos, ivec2 tlBound, ivec2 brBound) {
+    return pos.x >= tlBound.x && pos.x <= brBound.x && pos.y >= tlBound.y && pos.y <= brBound.y;
   }
 
-  void extend() {
-    topleft = glm::vec2(centre.x - (EXTENT / 2.0f), centre.y - (EXTENT / 2.0f));
-    bottomright = glm::vec2(centre.x + (EXTENT / 2.0f), centre.y + (EXTENT / 2.0f));
-  }
-
-  bool isOnTile(glm::vec2 pos, glm::vec2 tl, glm::vec2 br) {
-    return pos.x >= tl.x && pos.x <= br.x && pos.y >= tl.y && pos.y <= br.y;
-  }
-
-  directions clip(std::pair<glm::vec2, glm::vec2> tileBounds) {
+  static directions clip(ivec2 tlBound, ivec2 brBound, ivec2& topleft, ivec2& bottomright) {
     directions dirs;
-    auto [tl, br] = tileBounds;
 
-    dirs.left = topleft.x < tl.x;
-    dirs.up = topleft.y < tl.y;
-    dirs.right = bottomright.x >= br.x;
-    dirs.down = bottomright.y >= br.y;
-    dirs.keep = isOnTile(topleft, tl, br) || isOnTile(bottomright, tl, br);
+
+    dirs.left = topleft.x < tlBound.x;
+    dirs.up = topleft.y < tlBound.y;
+    dirs.right = bottomright.x >= brBound.x;
+    dirs.down = bottomright.y >= brBound.y;
 
     if (dirs.left) {
-      topleft.x = tl.x;
+      topleft.x = tlBound.x;
     }
     if (dirs.up) {
-      topleft.y = tl.y;
+      topleft.y = tlBound.y;
     }
     if (dirs.right) {
-      bottomright.x = br.x;
+      bottomright.x = brBound.x;
     }
     if (dirs.down) {
-      bottomright.y = br.y;
+      bottomright.y = brBound.y;
     }
+    dirs.keep = isOnTile(topleft, tlBound, brBound) || isOnTile(bottomright, tlBound, brBound);
     return dirs;
   }
 };

@@ -29,30 +29,42 @@ std::uint32_t splatPoints(cv::Mat& image,
   auto numPtsOnTile = clipCoords.size() / fb.numTiles;
   #pragma omp parallel for schedule(static, 128) num_threads(32)
   for (auto t = 0u; t < fb.numTiles; ++t) {
-    auto bounds = fb.getTileBounds(t);
+    auto [tlBound, brBound] = fb.getTileBounds(t);
     auto bufferStrip = std::vector<glm::vec4>(clipCoords.begin() + t * numPtsOnTile,
                                                clipCoords.begin() + (t + 1) * numPtsOnTile);
 
     for (auto i = 0u; i < 5; ++i) {
-      // Convert from clip-space to pixel coords:
-      glm::vec2 vp = fb.clipSpaceToViewport(bufferStrip[i]);
-      struct square sq;
-      sq.centre = {vp.x, vp.y, 0.0f, 1.0f};
-      sq.extend();
-      auto dirs = sq.clip(bounds);
 
-      // Clip points to the image and splat:
-      for (std::uint32_t i = sq.topleft.x; i < sq.bottomright.x; i++) {
-        for (std::uint32_t j = sq.topleft.y; j < sq.bottomright.y; j++) {
+
+      // Convert from clip-space to pixel coords:
+      glm::vec2 centre2D = fb.clipSpaceToViewport(bufferStrip[i]);
+
+      // give point a square extent
+      ivec2 topleft = {centre2D.x - (EXTENT / 2.0f), centre2D.y - (EXTENT / 2.0f)};
+      ivec2 bottomright = {centre2D.x + (EXTENT / 2.0f), centre2D.y + (EXTENT / 2.0f)};
+
+      // clip the square to the tile, return true 
+      // if it needs to be copied to a different direction
+      auto dirs = square::clip(tlBound, brBound, topleft, bottomright);
+
+      // topleft.x = floor(topleft.x - tlBound.x);
+      // topleft.y = floor(topleft.y - tlBound.y);
+      // bottomright.x = floor(bottomright.x - tlBound.x);
+      // bottomright.y = floor(bottomright.y - tlBound.y);
+
+
+      // // Clip points to the image and splat:
+      for (std::uint32_t i = topleft.x; i < bottomright.x; i++) {
+        for (std::uint32_t j = topleft.y; j < bottomright.y; j++) {
           #pragma omp atomic update
           image.at<cv::Vec3b>(j, i) += colour;
           count += 1;
         }
       }
 
-      if (dirs.right && t < fb.numTiles - 1) {
-        copiedPoints[t + 1].push_back(glm::vec4(in[i].p, 1.f));
-      }
+      // if (dirs.right && t < fb.numTiles - 1) {
+      //   copiedPoints[t + 1].push_back(glm::vec4(in[i].p, 1.f));
+      // }
 
     }
   }
@@ -64,19 +76,19 @@ std::uint32_t splatPoints(cv::Mat& image,
 
     for (auto i = 0u; i < inPts.size(); ++i) {
       // Convert from clip-space to pixel coords:
-      glm::vec2 vp = fb.clipSpaceToViewport(mvp * inPts[i]);
-      struct square sq;
-      sq.centre = {vp.x, vp.y, 0.0f, 1.0f};
-      sq.extend();
-      auto dirs = sq.clip(bounds);
+      // glm::vec2 vp = fb.clipSpaceToViewport(mvp * inPts[i]);
+      // struct square sq;
+      // sq.centre = {vp.x, vp.y, 0.0f, 1.0f};
+      // sq.extend();
+      // auto dirs = sq.clip(bounds);
 
-      // Clip points to the image and splat:
-      for (std::uint32_t i = sq.topleft.x; i < sq.bottomright.x; i++) {
-        for (std::uint32_t j = sq.topleft.y; j < sq.bottomright.y; j++) {
-          #pragma omp atomic update
-          image.at<cv::Vec3b>(j, i) += c2;
-        }
-      }
+      // // Clip points to the image and splat:
+      // for (std::uint32_t i = sq.topleft.x; i < sq.bottomright.x; i++) {
+      //   for (std::uint32_t j = sq.topleft.y; j < sq.bottomright.y; j++) {
+      //     #pragma omp atomic update
+      //     image.at<cv::Vec3b>(j, i) += c2;
+      //   }
+      // }
 
     }
   }

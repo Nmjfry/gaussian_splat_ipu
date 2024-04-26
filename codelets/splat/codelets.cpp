@@ -49,27 +49,29 @@ public:
   poplar::InOut<poplar::Vector<float>> squares;
   unsigned squaresRecieved = 0;
 
-  int toByteBufferIndex(float x, float y, std::pair<glm::vec2, glm::vec2> tileBounds) {
-    return int(floor(x - tileBounds.first.x) + floor(y - tileBounds.first.y) * IPU_TILEWIDTH) * 4;
+  unsigned gidsSent = 0;
+
+  unsigned toByteBufferIndex(float x, float y) {
+    return unsigned(x + y * IPU_TILEWIDTH) * 4;
   } 
 
-  ivec4 getPixel(int idx) {
+  void setPixel(float x, float y, ivec4 &colour) {
     ivec4 pixel;
+    unsigned idx = toByteBufferIndex(x, y);
     memcpy(&pixel, &localFb[idx], sizeof(pixel));
-    return pixel;
+    pixel = pixel + colour;
+    memcpy(&localFb[idx], &pixel, sizeof(pixel));
   }
 
-  void splat(struct square sq, std::pair<glm::vec2, glm::vec2> tileBounds) {
-    for (auto i = sq.topleft.x; i < sq.bottomright.x; i++) {
-        for (auto j = sq.topleft.y; j < sq.bottomright.y; j++) {
-          auto index = toByteBufferIndex(i, j, tileBounds);
-          ivec4 c = getPixel(index) + sq.colour;
-          memcpy(&localFb[index], &c, sizeof(c));
+  void splat(ivec4 colour, ivec2 tl, ivec2 br) {
+    for (auto i = tl.x; i < br.x; i++) {
+      for (auto j = tl.y; j < br.y; j++) {
+        setPixel(i, j, colour);
       }
     }
   }
 
-  void pack(poplar::Vector<float> &buffer, unsigned idx, struct square sq) {
+  void pack(poplar::Vector<float> &buffer, unsigned idx, struct square& sq) {
     memcpy(&buffer[idx], &sq, sizeof(sq.centre));
     memcpy(&buffer[idx+sizeof(sq.centre)], &sq.colour, sizeof(sq.colour));
     memcpy(&buffer[idx+sizeof(sq.centre)+sizeof(sq.colour)], &sq.gid, sizeof(sq.gid));
@@ -77,15 +79,17 @@ public:
 
   square unpack(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx) {
     struct square sq;
+
     ivec4 centre;
     memcpy(&centre, &buffer[idx], sizeof(centre));
-    glm::vec4 upt = glm::vec4(centre.x, centre.y, centre.z, centre.w);
     ivec4 colour;
     memcpy(&colour, &buffer[idx+sizeof(centre)], sizeof(colour));
+    unsigned gid;
+    memcpy(&gid, &buffer[idx+sizeof(centre)+sizeof(colour)], sizeof(gid));
 
     sq.centre = centre;
     sq.colour = colour;
-    sq.gid = colour.w;
+    sq.gid = gid;
     
     return sq;
   }
@@ -101,62 +105,67 @@ public:
     squaresSentDown = 0;
   }
 
-  void send(directions dirs, struct square sq, glm::vec4 upt) {
+  void send(struct square &sq, directions dirs) {
     if (dirs.right && squaresSentRight < rightOut.size()) {
-      sq.centre = {upt.x, upt.y, upt.z, upt.w};
       pack(rightOut, squaresSentRight, sq);
       squaresSentRight+=sizeof(square);
     }
 
     if (dirs.left && squaresSentLeft < leftOut.size()) {
-      sq.centre = {upt.x, upt.y, upt.z, upt.w};
       pack(leftOut, squaresSentLeft, sq);
       squaresSentLeft+=sizeof(square);
     }
 
     if (dirs.up && squaresSentUp < upOut.size()) {
-      sq.centre = {upt.x, upt.y, upt.z, upt.w};
       pack(upOut, squaresSentUp, sq);
       squaresSentUp+=sizeof(square);
     }
 
     if (dirs.down && squaresSentDown < downOut.size()) {
-      sq.centre = {upt.x, upt.y, upt.z, upt.w};
       pack(downOut, squaresSentDown, sq);
       squaresSentDown+=sizeof(square);
     }
-    
+          
     if (dirs.keep && squaresRecieved < squares.size()) {
       pack(squares, squaresRecieved, sq);
       squaresRecieved+=sizeof(square);
     }
   }
 
-  void recieveFromBuffer(poplar::Input<poplar::Vector<float>> &bufferIn, TiledFramebuffer &viewport, const glm::mat4 &m) {
-    auto tileBounds = viewport.getTileBounds(tile_id[0]);
+  void recieveFromBuffer(poplar::Input<poplar::Vector<float>> &bufferIn, ivec2& tlBound, ivec2& brBound, TiledFramebuffer& fbMapping) {
+    const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
 
     for (auto i = 0; i < bufferIn.size(); i+=sizeof(square)) {
       struct square sq = unpack(bufferIn, i);
-
       if (sq.gid == 0) {
         break;
       }
 
       auto upt = glm::vec4(sq.centre.x, sq.centre.y, sq.centre.z, sq.centre.w);
-
-      auto pt = m * upt; 
-      auto vp = viewport.clipSpaceToViewport(pt);
-
+      glm::vec2 centre2D = fbMapping.clipSpaceToViewport(m * upt);
       // give point a square extent
-      sq.centre = {vp.x, vp.y, 0.0f, 1.0f};
-      sq.extend();
+      ivec2 topleft = {centre2D.x - (EXTENT / 2.0f), centre2D.y - (EXTENT / 2.0f)};
+      ivec2 bottomright = {centre2D.x + (EXTENT / 2.0f), centre2D.y + (EXTENT / 2.0f)};
 
       // clip the square to the tile, return true 
-      // if it needs to be copied to a different tile
-      auto dirs = sq.clip(tileBounds);
-      splat(sq, tileBounds);
-      send(dirs, sq, upt);
+      // if it needs to be copied to a different direction
+      auto dirs = square::clip(tlBound, brBound, topleft, bottomright);
+
+      // set the topleft and bottomright to be relative to the tile
+      viewspaceToTile(topleft, tlBound);
+      viewspaceToTile(bottomright, tlBound);
+
+      if (dirs.keep) {
+        splat(sq.colour, topleft, bottomright);
+      }
+
+      send(sq, dirs);
     }
+  }
+
+  void viewspaceToTile(ivec2& pt, ivec2 tlBound) {
+    pt.x = floor(pt.x - tlBound.x);
+    pt.y = floor(pt.y - tlBound.y);
   }
 
   bool compute(unsigned workerId) {
@@ -165,43 +174,49 @@ public:
       return true;
     }
 
-
+    TiledFramebuffer fbMapping(IPU_TILEWIDTH, IPU_TILEHEIGHT);
+    auto [tlBound, brBound] = fbMapping.getTileBounds(tile_id[0]);
     // Transpose because GLM storage order is column major:
     const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
-    TiledFramebuffer viewport(IPU_TILEWIDTH, IPU_TILEHEIGHT);
-    auto tileBounds = viewport.getTileBounds(tile_id[0]);
-
-    float tid_c = tile_id[0] * (1.0f / viewport.numTiles);
+    float tid_c = tile_id[0] * (1.0f / fbMapping.numTiles);
     ivec4 tidColour = {1.0f, 0.0f, tid_c, 0.0f};
-
+    ivec4 green = {0.0f, 1.0f, 0.0f, 1.0f};
     // zero the framebuffer and clear the send buffers
     clearFb();
-        
-    recieveFromBuffer(leftIn, viewport, m);
-    recieveFromBuffer(rightIn, viewport, m);
-    recieveFromBuffer(upIn, viewport, m);
-    recieveFromBuffer(downIn, viewport, m);
+
+    recieveFromBuffer(rightIn, tlBound, brBound, fbMapping);
+    recieveFromBuffer(leftIn, tlBound, brBound, fbMapping);
+    recieveFromBuffer(upIn, tlBound, brBound, fbMapping);
+    recieveFromBuffer(downIn, tlBound, brBound, fbMapping);
 
      // loop over the vertices originally stored on this tile
     for (auto i = 0; i < vertsIn.size(); i+=4) {
-      struct square sq;
-
       auto upt = glm::make_vec4(&vertsIn[i]);
 
-      auto pt = m * upt; 
-      auto vp = viewport.clipSpaceToViewport(pt);
-
+      glm::vec2 centre2D = fbMapping.clipSpaceToViewport(m * upt);
       // give point a square extent
-      sq.centre = {vp.x, vp.y, 0.0f, 1.0f};
-      sq.extend();
+      ivec2 topleft = {centre2D.x - (EXTENT / 2.0f), centre2D.y - (EXTENT / 2.0f)};
+      ivec2 bottomright = {centre2D.x + (EXTENT / 2.0f), centre2D.y + (EXTENT / 2.0f)};
 
       // clip the square to the tile, return true 
       // if it needs to be copied to a different direction
-      auto dirs = sq.clip(tileBounds);
-      splat(sq, tileBounds);
-      sq.colour = tidColour;
-      sq.colour.w = (i/4)+1+tile_id[0];
-      send(dirs, sq, upt);
+      auto dirs = square::clip(tlBound, brBound, topleft, bottomright);
+
+      // set the topleft and bottomright to be relative to the tile
+      viewspaceToTile(topleft, tlBound);
+      viewspaceToTile(bottomright, tlBound);
+
+      if (dirs.keep) {
+        splat(green, topleft, bottomright);
+      }
+
+      if (gidsSent < squares.size()) {
+        struct square sq;
+        sq.centre = {upt.x, upt.y, upt.z, upt.w};
+        sq.colour = tidColour;
+        sq.gid = (i/4)+1+tile_id[0];
+        send(sq, dirs);
+      }
     }
 
 
