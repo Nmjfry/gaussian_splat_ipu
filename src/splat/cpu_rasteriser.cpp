@@ -21,6 +21,7 @@ std::uint32_t splatPoints(cv::Mat& image,
                           const splat::Points& in,
                           const glm::mat4& mvp,
                           TiledFramebuffer& fb, 
+                          Viewport& vp,
                           std::uint8_t value) {
   std::uint32_t count = 0u;
   const auto colour = cv::Vec3b(0, 255, 0);
@@ -35,9 +36,8 @@ std::uint32_t splatPoints(cv::Mat& image,
 
     for (auto i = 0u; i < 5; ++i) {
 
-
       // Convert from clip-space to pixel coords:
-      glm::vec2 centre2D = fb.clipSpaceToViewport(bufferStrip[i]);
+      glm::vec2 centre2D = vp.clipSpaceToViewport(bufferStrip[i]);
 
       // give point a square extent
       ivec2 topleft = {centre2D.x - (EXTENT / 2.0f), centre2D.y - (EXTENT / 2.0f)};
@@ -46,12 +46,6 @@ std::uint32_t splatPoints(cv::Mat& image,
       // clip the square to the tile, return true 
       // if it needs to be copied to a different direction
       auto dirs = square::clip(tlBound, brBound, topleft, bottomright);
-
-      // topleft.x = floor(topleft.x - tlBound.x);
-      // topleft.y = floor(topleft.y - tlBound.y);
-      // bottomright.x = floor(bottomright.x - tlBound.x);
-      // bottomright.y = floor(bottomright.y - tlBound.y);
-
 
       // // Clip points to the image and splat:
       for (std::uint32_t i = topleft.x; i < bottomright.x; i++) {
@@ -62,9 +56,18 @@ std::uint32_t splatPoints(cv::Mat& image,
         }
       }
 
-      // if (dirs.right && t < fb.numTiles - 1) {
-      //   copiedPoints[t + 1].push_back(glm::vec4(in[i].p, 1.f));
-      // }
+      if (dirs.right && t < fb.numTiles - 1) {
+        copiedPoints[t + 1].push_back(glm::vec4(in[i].p, 1.f));
+      } 
+      if (dirs.left && t > 0) {
+        copiedPoints[t - 1].push_back(glm::vec4(in[i].p, 1.f));
+      } 
+      if (dirs.up && t > fb.numTilesAcross) {
+        copiedPoints[t - fb.numTilesAcross].push_back(glm::vec4(in[i].p, 1.f));
+      }
+      if (dirs.down && t + fb.numTilesAcross < fb.numTiles) {
+        copiedPoints[t + fb.numTilesAcross].push_back(glm::vec4(in[i].p, 1.f));
+      }
 
     }
   }
@@ -76,19 +79,24 @@ std::uint32_t splatPoints(cv::Mat& image,
 
     for (auto i = 0u; i < inPts.size(); ++i) {
       // Convert from clip-space to pixel coords:
-      // glm::vec2 vp = fb.clipSpaceToViewport(mvp * inPts[i]);
-      // struct square sq;
-      // sq.centre = {vp.x, vp.y, 0.0f, 1.0f};
-      // sq.extend();
-      // auto dirs = sq.clip(bounds);
+      glm::vec2 centre2D = vp.clipSpaceToViewport(mvp * inPts[i]);
+
+      // give point a square extent
+      ivec2 topleft = {centre2D.x - (EXTENT / 2.0f), centre2D.y - (EXTENT / 2.0f)};
+      ivec2 bottomright = {centre2D.x + (EXTENT / 2.0f), centre2D.y + (EXTENT / 2.0f)};
+
+      // clip the square to the tile, return true 
+      // if it needs to be copied to a different direction
+      auto dirs = square::clip(bounds.first, bounds.second, topleft, bottomright);
 
       // // Clip points to the image and splat:
-      // for (std::uint32_t i = sq.topleft.x; i < sq.bottomright.x; i++) {
-      //   for (std::uint32_t j = sq.topleft.y; j < sq.bottomright.y; j++) {
-      //     #pragma omp atomic update
-      //     image.at<cv::Vec3b>(j, i) += c2;
-      //   }
-      // }
+      for (std::uint32_t i = topleft.x; i < bottomright.x; i++) {
+        for (std::uint32_t j = topleft.y; j < bottomright.y; j++) {
+          #pragma omp atomic update
+          image.at<cv::Vec3b>(j, i) += c2;
+          count += 1;
+        }
+      }
 
     }
   }
@@ -99,6 +107,7 @@ std::uint32_t splatPoints(cv::Mat& image,
 void buildTileHistogram(std::vector<std::uint32_t>& counts,
                         const std::vector<glm::vec4>& clipCoords,
                         TiledFramebuffer& fb,
+                        Viewport& vp,
                         std::uint8_t value) {
   std::uint32_t count = 0u;
   const auto colour = cv::Vec3b(value, value, value);
@@ -111,7 +120,7 @@ void buildTileHistogram(std::vector<std::uint32_t>& counts,
   #pragma omp parallel for schedule(static, 128) num_threads(32)
   for (auto& cs : clipCoords) {
     // Convert from clip-space to pixel coords:
-    glm::vec2 windowCoords = fb.clipSpaceToViewport(cs);
+    glm::vec2 windowCoords = vp.clipSpaceToViewport(cs);
     std::uint32_t r = windowCoords.y;
     std::uint32_t c = windowCoords.x;
 

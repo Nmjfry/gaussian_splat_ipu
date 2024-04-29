@@ -60,9 +60,8 @@ public:
   TiledFramebuffer(std::uint16_t tw, std::uint16_t th)
   : // TODO: template this on the image size and tile size
     width(IMWIDTH), height(IMHEIGHT),
-    tileWidth(tw), tileHeight(th), 
+    tileWidth(tw), tileHeight(th)
     // for now just assume the tile holds the whole image
-    spec(0.f, 0.f, IMWIDTH, IMHEIGHT)
   {
     numTilesAcross = width / tileWidth;
     numTilesDown = height / tileHeight;
@@ -74,7 +73,6 @@ public:
     height = h;
     tileWidth = tw;
     tileHeight = th;
-    spec = glm::vec4(0.f, 0.f, w, h);
     numTilesAcross = width / tileWidth;
     numTilesDown = height / tileHeight;
     numTiles = numTilesAcross * numTilesDown;
@@ -91,23 +89,6 @@ public:
     // Now flatten the tile indices:
     float tileIndex = (tileRowIndex * numTilesAcross) + tileColIndex;
     return tileIndex;
-  }
-
-  // Combine perspective division with viewport scaling:
-  glm::vec2 clipSpaceToViewport(glm::vec4 cs) const {
-    glm::vec2 vp(cs.x, cs.y);
-    vp *= .5f / cs.w;
-    vp += .5f;
-    return viewportTransform(vp);
-  }
-
-  // Converts from normalised screen coords to the specified view window:
-  glm::vec2 viewportTransform(glm::vec2 v) const {
-    v.x *= spec[2];
-    v.y *= spec[3];
-    v.x += spec[0];
-    v.y += spec[1];
-    return v;
   }
 
   // Compute the tile's positition for a given tile index:
@@ -135,8 +116,6 @@ public:
     return dirs;
   }
 
-  glm::vec4 spec;
-  
   std::uint16_t width;
   std::uint16_t height;
   std::uint16_t tileWidth;

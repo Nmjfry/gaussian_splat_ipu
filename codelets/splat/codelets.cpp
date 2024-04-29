@@ -7,6 +7,7 @@
 #include <glm/mat4x4.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include </home/nf20/workspace/gaussian_splat_ipu/include/tileMapping/tile_config.hpp>
+#include </home/nf20/workspace/gaussian_splat_ipu/include/splat/viewport.hpp>
 
 #ifdef __IPU__
 #include <ipu_vector_math>
@@ -47,10 +48,8 @@ public:
   unsigned squaresSentDown = 0;
 
   poplar::Input<poplar::Vector<float>> squares;
-  unsigned squaresRecieved = 0;
 
-  unsigned gidsSent = 0;
-  unsigned squaresRecieved2 = 0;
+  bool init = true;
 
   unsigned toByteBufferIndex(float x, float y) {
     return unsigned(x + y * IPU_TILEWIDTH) * 4;
@@ -77,19 +76,25 @@ public:
     pt.y = floor(pt.y - tlBound.y);
   }
 
-  void pack(poplar::Vector<float> &buffer, unsigned idx, struct square& sq) {
+  void insert(poplar::Vector<float> &buffer, unsigned idx, struct square& sq) {
+    if (idx + sizeof(square) > buffer.size()) {
+      return;
+    }
     memcpy(&buffer[idx], &sq, sizeof(sq.centre));
     memcpy(&buffer[idx+sizeof(sq.centre)], &sq.colour, sizeof(sq.colour));
     memcpy(&buffer[idx+sizeof(sq.centre)+sizeof(sq.colour)], &sq.gid, sizeof(sq.gid));
   }
 
-  void pack(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx, struct square& sq) {
+  void insert(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx, struct square& sq) {
+    if (idx + sizeof(square) > buffer.size()) {
+      return;
+    }
     memcpy((void *) &buffer[idx], &sq, sizeof(sq.centre));
     memcpy((void *) &buffer[idx+sizeof(sq.centre)], &sq.colour, sizeof(sq.colour));
     memcpy((void *) &buffer[idx+sizeof(sq.centre)+sizeof(sq.colour)], &sq.gid, sizeof(sq.gid));
   }
 
-  square unpack(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx) {
+  square unpackGaussian(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx) {
     struct square sq;
 
     ivec4 centre;
@@ -106,6 +111,101 @@ public:
     return sq;
   }
 
+  square unpackGaussian(poplar::Output<poplar::Vector<float>> &buffer, unsigned idx) {
+    struct square sq;
+
+    ivec4 centre;
+    memcpy(&centre, &buffer[idx], sizeof(centre));
+    ivec4 colour;
+    memcpy(&colour, &buffer[idx+sizeof(centre)], sizeof(colour));
+    unsigned gid;
+    memcpy(&gid, &buffer[idx+sizeof(centre)+sizeof(colour)], sizeof(gid));
+
+    sq.centre = centre;
+    sq.colour = colour;
+    sq.gid = gid;
+    
+    return sq;
+  }
+
+    // invalidate a gaussian in the buffer
+  void evict(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx) {
+    struct square sq;
+    sq.gid = 0;
+    insert(buffer, idx, sq);
+  }
+
+  bool hasCopyIn(struct square& sq, poplar::Input<poplar::Vector<float>> &buffer) {
+    for (auto i = 0; i + sizeof(square) < buffer.size(); i+=sizeof(square)) {
+      struct square sq2 = unpackGaussian(buffer, i);
+      if (sq2.gid == sq.gid) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void send(struct square &sq, directions dirs) {
+
+     auto hasCopy = [this](struct square& sq, poplar::Output<poplar::Vector<float>> &buffer) {
+      for (auto i = 0; i < buffer.size(); i+=sizeof(square)) {
+        struct square sq2 = unpackGaussian(buffer, i);
+        if (sq2.gid == sq.gid) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    if (dirs.right && squaresSentRight < rightOut.size() && !hasCopy(sq, rightOut)) {
+      insert(rightOut, squaresSentRight, sq);
+      squaresSentRight+=sizeof(square);
+    }
+
+    if (dirs.left && squaresSentLeft < leftOut.size() && !hasCopy(sq, leftOut)) {
+      insert(leftOut, squaresSentLeft, sq);
+      squaresSentLeft+=sizeof(square);
+    }
+
+    if (dirs.up && squaresSentUp < upOut.size() && !hasCopy(sq, upOut)) {
+      insert(upOut, squaresSentUp, sq);
+      squaresSentUp+=sizeof(square);
+    }
+
+    if (dirs.down && squaresSentDown < downOut.size() && !hasCopy(sq, downOut)) {
+      insert(downOut, squaresSentDown, sq);
+      squaresSentDown+=sizeof(square);
+    }
+
+  }
+
+  bool storeOnTile(struct square &sq) {
+    bool stored = false;
+
+    for (auto i = 0; i < squares.size(); i+=sizeof(square)) {
+      struct square sq2 = unpackGaussian(squares, i);
+      if (sq2.gid == 0) {
+        insert(squares, i, sq);
+        stored = true;
+        break;
+      }
+    }
+
+    if (!stored) {
+      // check i + sizeof(square) < vertsIn.size() because verts in is not multiple of square size
+      for (auto i = 0; i + sizeof(square) < vertsIn.size(); i+=sizeof(square)) {
+        struct square sq2 = unpackGaussian(vertsIn, i);
+        if (sq2.gid == 0) {
+          insert(vertsIn, i, sq);
+          stored = true;
+          break;
+        }
+      }
+    }
+
+    return stored;
+  }
+
   void clearFb() {
     for (auto i = 0; i < localFb.size(); i+=4) {
       auto black = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -117,91 +217,77 @@ public:
     squaresSentDown = 0;
   }
 
-
-  void init(TiledFramebuffer& fbMapping, const glm::mat4& m) {
-    bool init = gidsSent < vertsIn.size();
+  void initGaussians(ivec4 colour, const glm::mat4& m, const std::pair<ivec2, ivec2> tb, const splat::Viewport& vp) {
+    auto [tlBound, brBound] = tb;
 
     // loop over the points originally stored on this tile and initialise the gaussians
-    for (auto i = 0; i < vertsIn.size() && init; i+=4, gidsSent++) {
+    for (auto i = 0; i < vertsIn.size(); i+=4) {
       auto upt = glm::make_vec4(&vertsIn[i]);
 
       // give point a square extent
-      glm::vec2 centre2D = fbMapping.clipSpaceToViewport(m * upt);
+      glm::vec2 centre2D = vp.clipSpaceToViewport(m * upt);
       ivec2 topleft = {centre2D.x - (EXTENT / 2.0f), centre2D.y - (EXTENT / 2.0f)};
       ivec2 bottomright = {centre2D.x + (EXTENT / 2.0f), centre2D.y + (EXTENT / 2.0f)};
 
       // clip the square to the tile, return true 
       // if it needs to be copied to a different direction
-      auto [tlBound, brBound] = fbMapping.getTileBounds(tile_id[0]);
       auto dirs = square::clip(tlBound, brBound, topleft, bottomright);
 
-      if (gidsSent < squares.size()) {
-        struct square sq;
-        sq.centre = {upt.x, upt.y, upt.z, upt.w};
-        ivec4 tidColour = {1.0f, 0.0f, tile_id[0] * (1.0f / fbMapping.numTiles), 0.0f};
-        sq.colour = tidColour;
-        sq.gid = (i/4)+1+tile_id[0];
-        send(sq, dirs);
+      struct square sq;
+      sq.centre = {upt.x, upt.y, upt.z, upt.w};
+      sq.gid = (i/4)+1+tile_id[0];
+      // sq.colour = 
+      send(sq, dirs);
+
+      if (dirs.keep) {
+        storeOnTile(sq);
       }
-    }
+     }
+
+    init = false;
   }
 
-  void send(struct square &sq, directions dirs) {
-    if (dirs.right && squaresSentRight < rightOut.size()) {
-      pack(rightOut, squaresSentRight, sq);
-      squaresSentRight+=sizeof(square);
-    }
-
-    if (dirs.left && squaresSentLeft < leftOut.size()) {
-      pack(leftOut, squaresSentLeft, sq);
-      squaresSentLeft+=sizeof(square);
-    }
-
-    if (dirs.up && squaresSentUp < upOut.size()) {
-      pack(upOut, squaresSentUp, sq);
-      squaresSentUp+=sizeof(square);
-    }
-
-    if (dirs.down && squaresSentDown < downOut.size()) {
-      pack(downOut, squaresSentDown, sq);
-      squaresSentDown+=sizeof(square);
-    }
-
-    auto hasCopy = [this](struct square& sq, poplar::Input<poplar::Vector<float>> &buffer) {
-      for (auto i = 0; i + sizeof(square) < buffer.size(); i+=sizeof(square)) {
-        struct square sq2 = unpack(buffer, i);
-        if (sq2.gid == 0) {
-          return false;
-        }
-        if (sq2.gid == sq.gid) {
-          return true;
-        }
-      }
-      return false;
-    };
-          
-    if (dirs.keep && squaresRecieved < squares.size() && !hasCopy(sq, squares)) {
-      pack(squares, squaresRecieved, sq);
-      squaresRecieved+=sizeof(square);
-    }
-
-    if (dirs.keep && gidsSent >= vertsIn.size() && squaresRecieved2 + sizeof(square) < vertsIn.size() && !hasCopy(sq, vertsIn)) {
-      pack(vertsIn, squaresRecieved2, sq);
-      squaresRecieved2+=sizeof(square);
-    }
-  }
-
-  void readBuffer(poplar::Input<poplar::Vector<float>> &bufferIn, ivec2& tlBound, ivec2& brBound, TiledFramebuffer& fbMapping) {
-    const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
+  void readBuffer(poplar::Input<poplar::Vector<float>> &bufferIn, const glm::mat4& m, const std::pair<ivec2, ivec2> tb, const splat::Viewport& vp) {
+    auto [tlBound, brBound] = tb;
 
     for (auto i = 0; i < bufferIn.size(); i+=sizeof(square)) {
-      struct square sq = unpack(bufferIn, i);
+      struct square sq = unpackGaussian(bufferIn, i);
       if (sq.gid == 0) {
         break;
       }
 
       auto upt = glm::vec4(sq.centre.x, sq.centre.y, sq.centre.z, sq.centre.w);
-      glm::vec2 centre2D = fbMapping.clipSpaceToViewport(m * upt);
+      glm::vec2 centre2D = vp.clipSpaceToViewport(m * upt);
+      // give point a square extent
+      ivec2 topleft = {centre2D.x - (EXTENT / 2.0f), centre2D.y - (EXTENT / 2.0f)};
+      ivec2 bottomright = {centre2D.x + (EXTENT / 2.0f), centre2D.y + (EXTENT / 2.0f)};
+
+      // clip the square to the tile, return true 
+      // if it needs to be copied to a different direction
+      auto dirs = square::clip(tlBound, brBound, topleft, bottomright);
+
+      // set the topleft and bottomright to be relative to the tile
+      viewspaceToTile(topleft, tlBound);
+      viewspaceToTile(bottomright, tlBound);
+
+      if (dirs.keep && (!hasCopyIn(sq, squares) || !hasCopyIn(sq, vertsIn))) { 
+        storeOnTile(sq);
+      } 
+      send(sq, dirs);
+    }
+  }
+
+  void renderStored(poplar::Input<poplar::Vector<float>> &bufferIn, const glm::mat4& m, const std::pair<ivec2, ivec2> tb, const splat::Viewport& vp) {
+    auto [tlBound, brBound] = tb;
+
+    for (auto i = 0; i < bufferIn.size(); i+=sizeof(square)) {
+      struct square sq = unpackGaussian(bufferIn, i);
+      if (sq.gid == 0) {
+        continue;
+      }
+
+      auto upt = glm::vec4(sq.centre.x, sq.centre.y, sq.centre.z, sq.centre.w);
+      glm::vec2 centre2D = vp.clipSpaceToViewport(m * upt);
       // give point a square extent
       ivec2 topleft = {centre2D.x - (EXTENT / 2.0f), centre2D.y - (EXTENT / 2.0f)};
       ivec2 bottomright = {centre2D.x + (EXTENT / 2.0f), centre2D.y + (EXTENT / 2.0f)};
@@ -215,7 +301,10 @@ public:
       viewspaceToTile(bottomright, tlBound);
 
       if (dirs.keep) {
+        sq.colour = {1.0f, 0.0f, 0.0f, 0.0f};
         splat(sq.colour, topleft, bottomright);
+      } else {
+        evict(bufferIn, i);
       }
 
       send(sq, dirs);
@@ -227,24 +316,35 @@ public:
       return true;
     }
 
-    TiledFramebuffer fbMapping(IPU_TILEWIDTH, IPU_TILEHEIGHT);
+    // construct mapping from tile to framebuffer
+    const TiledFramebuffer fbMapping(IPU_TILEWIDTH, IPU_TILEHEIGHT);
+    const splat::Viewport vp(0.0f, 0.0f, IMWIDTH, IMHEIGHT);
     // Transpose because GLM storage order is column major:
     const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
+    const auto tb = fbMapping.getTileBounds(tile_id[0]);
     // zero the framebuffer and clear the send buffers
     clearFb();
-    // send gaussians to other tiles, or store in local memory
-    // recover the original vector for extra gaussian storage
-    init(fbMapping, m);
 
-    auto [tlBound, brBound] = fbMapping.getTileBounds(tile_id[0]);
+    ivec4 tidColour = {1.0f, 0.0f, tile_id[0] * (1.0f / fbMapping.numTiles), 0.0f};
 
-    readBuffer(rightIn, tlBound, brBound, fbMapping);
-    readBuffer(leftIn, tlBound, brBound, fbMapping);
-    readBuffer(upIn, tlBound, brBound, fbMapping);
-    readBuffer(downIn, tlBound, brBound, fbMapping);
+    if (init) {
+      // initialise the gaussians from the pts
+      // sends gaussians to other tiles, or stores in local memory
+      // recover the original vector for extra gaussian storage
+      initGaussians(tidColour, m, tb, vp);
+    } 
 
-    readBuffer(squares, tlBound, brBound, fbMapping);
-    readBuffer(vertsIn, tlBound, brBound, fbMapping);
+    // render anything inside the local tile memory
+    renderStored(squares, m, tb, vp);
+    renderStored(vertsIn, m, tb, vp);
+
+    // read the gaussians from the send buffers,
+    // project and clip, 
+    // send to other tiles if need 
+    readBuffer(rightIn, m, tb, vp);
+    readBuffer(leftIn, m, tb, vp);
+    readBuffer(upIn, m, tb, vp);
+    readBuffer(downIn, m, tb, vp);
 
     return true;
   }

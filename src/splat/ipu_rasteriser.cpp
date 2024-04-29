@@ -266,7 +266,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
       auto sliceFb = paddedFramebuffer.slice(mFb.front());
 
-      poplar::Tensor squares = graph.addVariable(poplar::FLOAT, {channelSize});
+      poplar::Tensor squares = graph.addVariable(poplar::FLOAT, {channelSize * 2});
 
       vg.setTileMapping(squares, t);
 

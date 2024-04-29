@@ -8,6 +8,7 @@
 
 #include <splat/geometry.hpp>
 #include <splat/camera.hpp>
+#include <splat/viewport.hpp>
 #include <tileMapping/tile_config.hpp>
 
 namespace splat {
@@ -23,11 +24,13 @@ std::uint32_t splatPoints(cv::Mat& image,
                           const splat::Points& in,
                           const glm::mat4& mvp,
                           TiledFramebuffer& fb,
+                          Viewport& vp,
                           std::uint8_t value=25);
 
 void buildTileHistogram(std::vector<std::uint32_t>& counts,
                         const std::vector<glm::vec4>& clipCoords,
                         TiledFramebuffer& fb,
+                        Viewport& vp,
                         std::uint8_t value=25);
 
 } // end of namespace splat

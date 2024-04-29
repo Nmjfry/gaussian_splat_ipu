@@ -134,7 +134,7 @@ int main(int argc, char** argv) {
   std::vector<glm::vec4> clipSpace;
   clipSpace.reserve(pts.size());
   TiledFramebuffer cpufb(CPU_TILEWIDTH, CPU_TILEHEIGHT);
-
+  splat::Viewport vp(0.f, 0.f, IMWIDTH, IMHEIGHT);
 
   // Video is encoded and sent in a separate thread:
   AsyncTask hostProcessing;
@@ -146,7 +146,7 @@ int main(int argc, char** argv) {
     }
     {
       // pvti::Tracepoint scope(&traceChannel, "build_histogram");
-      // splat::buildTileHistogram(pointCounts, clipSpace, cpufb);
+      // splat::buildTileHistogram(pointCounts, clipSpace, cpufb, vp);
     }
   };
 
@@ -161,7 +161,7 @@ int main(int argc, char** argv) {
       projectPoints(pts, projection, dynamicView, clipSpace);
       {
         pvti::Tracepoint scope(&traceChannel, "splatting_cpu");
-        count = splat::splatPoints(*imagePtr, clipSpace, pts, projection * dynamicView, cpufb);
+        count = splat::splatPoints(*imagePtr, clipSpace, pts, projection * dynamicView, cpufb, vp);
       }
     } else if (state.device == "ipu") {
       pvti::Tracepoint scoped(&traceChannel, "mvp_transform_ipu");
