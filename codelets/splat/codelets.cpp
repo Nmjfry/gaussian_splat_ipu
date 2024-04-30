@@ -233,7 +233,7 @@ public:
       sq.centre = {upt.x, upt.y, upt.z, upt.w};
       sq.gid = (i/4)+1+tile_id[0]*vertsIn.size(); // give unique gaussian id
       sq.colour = colour;
-      // send(sq, dirs);
+      send(sq, dirs);
 
       if (dirs.keep) {
         
@@ -282,12 +282,17 @@ public:
       viewspaceToTile(topleft, tlBound);
       viewspaceToTile(bottomright, tlBound);
 
-      if (dirs.keep && (!hasCopyIn(sq, squares) || !hasCopyIn(sq, vertsIn))) { 
-        if (!storeOnTile(sq)) {
-          // throw std::runtime_error("No space to store gaussian");
-          
+
+      if (dirs.keep && !hasCopyIn(sq, squares)) { 
+        for (auto s = 0u; s < squares.size(); s+=sizeof(square)) {
+          struct square sq2 = unpackGaussian(squares, s);
+          if (sq2.gid == 0u) {
+            insert(squares, s, sq);
+            break;
+          }
         }
       } 
+      send(sq, dirs);
     }
   }
 
@@ -317,9 +322,9 @@ public:
       if (dirs.keep) {
         splat(sq.colour, topleft, bottomright);
       } else {
-        // send(sq, dirs);
-        // evict(bufferIn, i);
+        evict(bufferIn, i);
       }
+      send(sq, dirs);
 
     }
   }
@@ -350,15 +355,15 @@ public:
 
     // render anything inside the local tile memory
     // renderStored(vertsIn, m, tb, vp);
-    renderStored(squares, m, tb, vp);
 
     // read the gaussians from the send buffers,
     // project and clip, 
     // send to other tiles if need 
-    // readBuffer(rightIn, m, tb, vp);
-    // readBuffer(leftIn, m, tb, vp);
-    // readBuffer(upIn, m, tb, vp);
-    // readBuffer(downIn, m, tb, vp);
+    renderStored(squares, m, tb, vp);
+    readBuffer(rightIn, m, tb, vp);
+    readBuffer(leftIn, m, tb, vp);
+    readBuffer(upIn, m, tb, vp);
+    readBuffer(downIn, m, tb, vp);
 
     return true;
   }
