@@ -148,6 +148,7 @@ struct square {
     dirs.up = topleft.y < tlBound.y;
     dirs.right = bottomright.x >= brBound.x;
     dirs.down = bottomright.y >= brBound.y;
+    dirs.keep = isOnTile(topleft, tlBound, brBound) || isOnTile(bottomright, tlBound, brBound);
 
     if (dirs.left) {
       topleft.x = tlBound.x;
@@ -161,7 +162,6 @@ struct square {
     if (dirs.down) {
       bottomright.y = brBound.y;
     }
-    dirs.keep = isOnTile(topleft, tlBound, brBound) || isOnTile(bottomright, tlBound, brBound);
     return dirs;
   }
 };

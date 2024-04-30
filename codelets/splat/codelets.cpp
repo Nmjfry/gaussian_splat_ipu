@@ -49,7 +49,7 @@ public:
 
   poplar::Input<poplar::Vector<float>> squares;
 
-  bool init = true;
+  unsigned gaussiansInitialised = 0;
 
   unsigned toByteBufferIndex(float x, float y) {
     return unsigned(x + y * IPU_TILEWIDTH) * 4;
@@ -76,22 +76,24 @@ public:
     pt.y = floor(pt.y - tlBound.y);
   }
 
-  void insert(poplar::Vector<float> &buffer, unsigned idx, struct square& sq) {
+  bool insert(poplar::Vector<float> &buffer, unsigned idx, struct square& sq) {
     if (idx + sizeof(square) > buffer.size()) {
-      return;
+      return false;
     }
     memcpy(&buffer[idx], &sq, sizeof(sq.centre));
     memcpy(&buffer[idx+sizeof(sq.centre)], &sq.colour, sizeof(sq.colour));
     memcpy(&buffer[idx+sizeof(sq.centre)+sizeof(sq.colour)], &sq.gid, sizeof(sq.gid));
+    return true;
   }
 
-  void insert(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx, struct square& sq) {
+  bool insert(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx, struct square& sq) {
     if (idx + sizeof(square) > buffer.size()) {
-      return;
+      return false;
     }
     memcpy((void *) &buffer[idx], &sq, sizeof(sq.centre));
     memcpy((void *) &buffer[idx+sizeof(sq.centre)], &sq.colour, sizeof(sq.colour));
     memcpy((void *) &buffer[idx+sizeof(sq.centre)+sizeof(sq.colour)], &sq.gid, sizeof(sq.gid));
+    return true;
   }
 
   square unpackGaussian(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx) {
@@ -180,30 +182,24 @@ public:
   }
 
   bool storeOnTile(struct square &sq) {
-    bool stored = false;
 
     for (auto i = 0; i < squares.size(); i+=sizeof(square)) {
       struct square sq2 = unpackGaussian(squares, i);
-      if (sq2.gid == 0) {
-        insert(squares, i, sq);
-        stored = true;
-        break;
+      if (sq2.gid == 0u) {
+        return insert(squares, i, sq);
       }
     }
 
-    if (!stored) {
-      // check i + sizeof(square) < vertsIn.size() because verts in is not multiple of square size
-      for (auto i = 0; i + sizeof(square) < vertsIn.size(); i+=sizeof(square)) {
-        struct square sq2 = unpackGaussian(vertsIn, i);
-        if (sq2.gid == 0) {
-          insert(vertsIn, i, sq);
-          stored = true;
-          break;
-        }
+    // check i + sizeof(square) < vertsIn.size() because verts in is not multiple of square size
+    for (auto i = 0; i + sizeof(square) < vertsIn.size(); i+=sizeof(square)) {
+      struct square sq2 = unpackGaussian(vertsIn, i);
+      if (sq2.gid == 0u) {
+        return insert(vertsIn, i, sq);
       }
     }
 
-    return stored;
+
+    return false;
   }
 
   void clearFb() {
@@ -217,7 +213,7 @@ public:
     squaresSentDown = 0;
   }
 
-  void initGaussians(ivec4 colour, const glm::mat4& m, const std::pair<ivec2, ivec2> tb, const splat::Viewport& vp) {
+  void initGaussians(ivec4& colour, const glm::mat4& m, const std::pair<ivec2, ivec2> tb, const splat::Viewport& vp) {
     auto [tlBound, brBound] = tb;
 
     // loop over the points originally stored on this tile and initialise the gaussians
@@ -235,16 +231,32 @@ public:
 
       struct square sq;
       sq.centre = {upt.x, upt.y, upt.z, upt.w};
-      sq.gid = (i/4)+1+tile_id[0];
-      // sq.colour = 
-      send(sq, dirs);
+      sq.gid = (i/4)+1+tile_id[0]*vertsIn.size(); // give unique gaussian id
+      sq.colour = colour;
+      // send(sq, dirs);
 
       if (dirs.keep) {
-        storeOnTile(sq);
+        
+        for (auto s = 0u; s < squares.size(); s+=sizeof(square)) {
+          struct square sq2 = unpackGaussian(squares, s);
+          if (sq2.gid == 0u) {
+            insert(squares, s, sq);
+            break;
+          }
+        }
+
+        // check i + sizeof(square) < vertsIn.size() because verts in is not multiple of square size
+        // for (auto t = 0u; t < i && t + sizeof(square) < vertsIn.size(); t+=sizeof(square)) {
+        //   struct square sq2 = unpackGaussian(vertsIn, t);
+        //   if (sq2.gid == 0u) {
+        //     insert(vertsIn, t, sq);
+        //   }
+        // }
       }
+
+      gaussiansInitialised++;
      }
 
-    init = false;
   }
 
   void readBuffer(poplar::Input<poplar::Vector<float>> &bufferIn, const glm::mat4& m, const std::pair<ivec2, ivec2> tb, const splat::Viewport& vp) {
@@ -252,7 +264,7 @@ public:
 
     for (auto i = 0; i < bufferIn.size(); i+=sizeof(square)) {
       struct square sq = unpackGaussian(bufferIn, i);
-      if (sq.gid == 0) {
+      if (sq.gid == 0u) {
         break;
       }
 
@@ -271,9 +283,11 @@ public:
       viewspaceToTile(bottomright, tlBound);
 
       if (dirs.keep && (!hasCopyIn(sq, squares) || !hasCopyIn(sq, vertsIn))) { 
-        storeOnTile(sq);
+        if (!storeOnTile(sq)) {
+          // throw std::runtime_error("No space to store gaussian");
+          
+        }
       } 
-      send(sq, dirs);
     }
   }
 
@@ -282,7 +296,7 @@ public:
 
     for (auto i = 0; i < bufferIn.size(); i+=sizeof(square)) {
       struct square sq = unpackGaussian(bufferIn, i);
-      if (sq.gid == 0) {
+      if (sq.gid == 0u) {
         continue;
       }
 
@@ -301,13 +315,12 @@ public:
       viewspaceToTile(bottomright, tlBound);
 
       if (dirs.keep) {
-        sq.colour = {1.0f, 0.0f, 0.0f, 0.0f};
         splat(sq.colour, topleft, bottomright);
       } else {
-        evict(bufferIn, i);
+        // send(sq, dirs);
+        // evict(bufferIn, i);
       }
 
-      send(sq, dirs);
     }
   }
 
@@ -325,9 +338,10 @@ public:
     // zero the framebuffer and clear the send buffers
     clearFb();
 
-    ivec4 tidColour = {1.0f, 0.0f, tile_id[0] * (1.0f / fbMapping.numTiles), 0.0f};
+    ivec4 tidColour = {0.0f, 1.0f, tile_id[0] * (1.0f / fbMapping.numTiles), 0.0f};
 
-    if (init) {
+
+    if (gaussiansInitialised < vertsIn.size() / sizeof(square)) {
       // initialise the gaussians from the pts
       // sends gaussians to other tiles, or stores in local memory
       // recover the original vector for extra gaussian storage
@@ -335,16 +349,16 @@ public:
     } 
 
     // render anything inside the local tile memory
+    // renderStored(vertsIn, m, tb, vp);
     renderStored(squares, m, tb, vp);
-    renderStored(vertsIn, m, tb, vp);
 
     // read the gaussians from the send buffers,
     // project and clip, 
     // send to other tiles if need 
-    readBuffer(rightIn, m, tb, vp);
-    readBuffer(leftIn, m, tb, vp);
-    readBuffer(upIn, m, tb, vp);
-    readBuffer(downIn, m, tb, vp);
+    // readBuffer(rightIn, m, tb, vp);
+    // readBuffer(leftIn, m, tb, vp);
+    // readBuffer(upIn, m, tb, vp);
+    // readBuffer(downIn, m, tb, vp);
 
     return true;
   }
