@@ -87,7 +87,6 @@ public:
   }
 
   bool insertAt(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx, struct square& sq) {
-
     if (idx + sizeof(square) > buffer.size()) {
       return false;
     }
@@ -112,24 +111,17 @@ public:
   }
 
   bool insert(poplar::Output<poplar::Vector<float>> &buffer, struct square& sq) {
+    unsigned idx = buffer.size();
     for (auto i = 0; i < buffer.size(); i+=sizeof(square)) {
       auto gid = unpackGaussian(buffer, i).gid;
-
       if (gid == sq.gid) {
         return false;
       }
-      // printf("gid: %d, inserting %d\n", gid, sq.gid);
-      if (gid == 0u) {
-        for (auto j = i; j < buffer.size(); j+=sizeof(square)) {
-          auto gid2 = unpackGaussian(buffer, j).gid;
-          if (gid2 == sq.gid) {
-            return false;
-          }
-        }
-        return insertAt(buffer, i, sq);
+      if (gid == 0u && i < idx) {
+        idx = i;
       }
     }
-    return false;
+    return insertAt(buffer, idx, sq);
   }
 
   square unpackGaussian(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx) {
@@ -173,19 +165,14 @@ public:
     insertAt(buffer, idx, sq);
   }
 
-  bool hasCopyIn(struct square& sq, poplar::Input<poplar::Vector<float>> &buffer) {
-    for (auto i = 0; i + sizeof(square) < buffer.size(); i+=sizeof(square)) {
-      struct square sq2 = unpackGaussian(buffer, i);
-      if (sq2.gid == sq.gid) {
-        return true;
-      }
-    }
-    return false;
+     // invalidate a gaussian in the buffer
+  void evict(poplar::Output<poplar::Vector<float>> &buffer, unsigned idx) {
+    struct square sq;
+    sq.gid = 0;
+    insertAt(buffer, idx, sq);
   }
 
   void send(struct square &sq, directions dirs) {
-
-    // printf("Directions right: %d, left: %d, up: %d, down: %d\n", dirs.right, dirs.left, dirs.up, dirs.down);
     if (dirs.right) {
       insert(rightOut, sq);
     }
@@ -198,37 +185,6 @@ public:
     if (dirs.down) {
       insert(downOut, sq);
     }
-
-    //  auto hasCopy = [this](struct square& sq, poplar::Output<poplar::Vector<float>> &buffer) {
-    //   for (auto i = 0; i < buffer.size(); i+=sizeof(square)) {
-    //     struct square sq2 = unpackGaussian(buffer, i);
-    //     if (sq2.gid == sq.gid) {
-    //       return true;
-    //     }
-    //   }
-    //   return false;
-    // };
-
-    // if (dirs.right && squaresSentRight < rightOut.size() && !hasCopy(sq, rightOut)) {
-    //   insertAt(rightOut, squaresSentRight, sq);
-    //   squaresSentRight+=sizeof(square);
-    // }
-
-    // if (dirs.left && squaresSentLeft < leftOut.size() && !hasCopy(sq, leftOut)) {
-    //   insertAt(leftOut, squaresSentLeft, sq);
-    //   squaresSentLeft+=sizeof(square);
-    // }
-
-    // if (dirs.up && squaresSentUp < upOut.size() && !hasCopy(sq, upOut)) {
-    //   insertAt(upOut, squaresSentUp, sq);
-    //   squaresSentUp+=sizeof(square);
-    // }
-
-    // if (dirs.down && squaresSentDown < downOut.size() && !hasCopy(sq, downOut)) {
-    //   insertAt(downOut, squaresSentDown, sq);
-    //   squaresSentDown+=sizeof(square);
-    // }
-
   }
 
   void clearFb() {
@@ -236,23 +192,19 @@ public:
       auto black = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
       memcpy(&localFb[i], glm::value_ptr(black), sizeof(black));
     }
-    squaresSentRight = 0;
-    squaresSentLeft = 0;
-    squaresSentUp = 0;
-    squaresSentDown = 0;
   }
 
   void initGaussians(ivec4& colour, const glm::mat4& m, const std::pair<ivec2, ivec2> tb, const splat::Viewport& vp) {
     auto [tlBound, brBound] = tb;
 
     // loop over the points originally stored on this tile and initialise the gaussians
-    for (auto i = 0; i < 4; i+=4) { //vertsIn.size(); i+=4) {
+    for (auto i = 0; i < 4; i+=4) {//vertsIn.size(); i+=4) {
       auto upt = glm::make_vec4(&vertsIn[i]);
 
       // give point a square extent
       glm::vec2 centre2D = vp.clipSpaceToViewport(m * upt);
-      printf("centre2D: %f %f\n", centre2D.x, centre2D.y);
-      printf("bounds: %f %f %f %f\n", tlBound.x, tlBound.y, brBound.x, brBound.y);
+      // printf("centre2D: %f %f\n", centre2D.x, centre2D.y);
+      // printf("bounds: %f %f %f %f\n", tlBound.x, tlBound.y, brBound.x, brBound.y);
       ivec2 topleft = {centre2D.x - (EXTENT / 2.0f), centre2D.y - (EXTENT / 2.0f)};
       ivec2 bottomright = {centre2D.x + (EXTENT / 2.0f), centre2D.y + (EXTENT / 2.0f)};
 
@@ -283,6 +235,8 @@ public:
       if (sq.gid == 0u) {
         break;
       }
+      // printf("gid: %d\n", sq.gid);
+      // printf("loc in buffer %d\n", i);
 
       for (auto i = 0; i < localFb.size(); i+=4) {
         auto green = glm::vec4(0.0f, .2f, 0.0f, 0.0f);
@@ -304,11 +258,8 @@ public:
       viewspaceToTile(topleft, tlBound);
       viewspaceToTile(bottomright, tlBound);
 
-      sq.colour = {1.0f, 0.0f, 1.0f, 0.0f};
-
-
       if (dirs.keep) { 
-        splat(sq.colour, topleft, bottomright);
+        // splat(sq.colour, topleft, bottomright);
         insert(squares, sq);
       } 
       send(sq, dirs);
@@ -363,13 +314,21 @@ public:
     // zero the framebuffer and clear the send buffers
     clearFb();
 
+    //clear all of the out buffers:
+    for (auto i = 0; i < rightOut.size(); i+=sizeof(square)) {
+      evict(rightOut, i);
+      evict(leftOut, i);
+      evict(upOut, i);
+      evict(downOut, i);
+    }
+
     ivec4 tidColour = {0.0f, 1.0f, tile_id[0] * (1.0f / fbMapping.numTiles), 0.0f};
 
    
     if (tile_id[0] == 700) {
 
-      if (gaussiansInitialised < 1) {// vertsIn.size() / sizeof(square)) {
-        printf("tile_id: %d\n", tile_id[0]);
+      if (gaussiansInitialised <  1) {//vertsIn.size() / sizeof(square)) {
+        // printf("tile_id: %d\n", tile_id[0]);
 
         // initialise the gaussians from the pts
         // sends gaussians to other tiles, or stores in local memory
@@ -384,13 +343,13 @@ public:
     // read the gaussians from the send buffers,
     // project and clip, 
     // send to other tiles if need 
-    renderStored(squares, m, tb, vp);
 
     readBuffer(rightIn, m, tb, vp);
     readBuffer(leftIn, m, tb, vp);
     readBuffer(upIn, m, tb, vp);
     readBuffer(downIn, m, tb, vp);
 
+    renderStored(squares, m, tb, vp);
     return true;
   }
  
