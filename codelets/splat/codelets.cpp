@@ -47,7 +47,8 @@ public:
   poplar::Output<poplar::Vector<float>> downOut;
   unsigned squaresSentDown = 0;
 
-  poplar::Input<poplar::Vector<float>> squares;
+  poplar::InOut<poplar::Vector<float>> squares;
+
 
   unsigned gaussiansInitialised = 0;
 
@@ -86,31 +87,7 @@ public:
     return true;
   }
 
-  bool insertAt(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx, struct square& sq) {
-    if (idx + sizeof(square) > buffer.size()) {
-      return false;
-    }
-    memcpy((void *) &buffer[idx], &sq, sizeof(sq.centre));
-    memcpy((void *) &buffer[idx+sizeof(sq.centre)], &sq.colour, sizeof(sq.colour));
-    memcpy((void *) &buffer[idx+sizeof(sq.centre)+sizeof(sq.colour)], &sq.gid, sizeof(sq.gid));
-    return true;
-  }
-
-  bool insert(poplar::Input<poplar::Vector<float>> &buffer, struct square& sq) {
-    for (auto i = 0; i < buffer.size(); i+=sizeof(square)) {
-      if (unpackGaussian(buffer, i).gid == 0u) {
-        for (auto j = i + sizeof(square); j < buffer.size(); j+=sizeof(square)) {
-          if (unpackGaussian(buffer, j).gid == sq.gid) {
-            return false;
-          }
-        }
-        return insertAt(buffer, i, sq);
-      }
-    }
-    return false;
-  }
-
-  bool insert(poplar::Output<poplar::Vector<float>> &buffer, struct square& sq) {
+  bool insert(poplar::Vector<float> &buffer, struct square& sq) {
     unsigned idx = buffer.size();
     for (auto i = 0; i < buffer.size(); i+=sizeof(square)) {
       auto gid = unpackGaussian(buffer, i).gid;
@@ -141,7 +118,7 @@ public:
     return sq;
   }
 
-  square unpackGaussian(poplar::Output<poplar::Vector<float>> &buffer, unsigned idx) {
+  square unpackGaussian(poplar::Vector<float> &buffer, unsigned idx) {
     struct square sq;
 
     ivec4 centre;
@@ -159,14 +136,7 @@ public:
   }
 
     // invalidate a gaussian in the buffer
-  void evict(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx) {
-    struct square sq;
-    sq.gid = 0;
-    insertAt(buffer, idx, sq);
-  }
-
-     // invalidate a gaussian in the buffer
-  void evict(poplar::Output<poplar::Vector<float>> &buffer, unsigned idx) {
+  void evict(poplar::Vector<float> &buffer, unsigned idx) {
     struct square sq;
     sq.gid = 0;
     insertAt(buffer, idx, sq);
@@ -198,7 +168,7 @@ public:
     auto [tlBound, brBound] = tb;
 
     // loop over the points originally stored on this tile and initialise the gaussians
-    for (auto i = 0; i < 4; i+=4) {//vertsIn.size(); i+=4) {
+    for (auto i = 0; i < 1; i+=4) {// vertsIn.size(); i+=4) {
       auto upt = glm::make_vec4(&vertsIn[i]);
 
       // give point a square extent
@@ -266,7 +236,7 @@ public:
     }
   }
 
-  void renderStored(poplar::Input<poplar::Vector<float>> &bufferIn, const glm::mat4& m, const std::pair<ivec2, ivec2> tb, const splat::Viewport& vp) {
+  void renderStored(poplar::Vector<float> &bufferIn, const glm::mat4& m, const std::pair<ivec2, ivec2> tb, const splat::Viewport& vp) {
     auto [tlBound, brBound] = tb;
 
     for (auto i = 0; i < bufferIn.size(); i+=sizeof(square)) {
@@ -299,6 +269,27 @@ public:
     }
   }
 
+  bool isFull(poplar::Vector<float> &buffer) {
+    for (auto i = 0; i < buffer.size(); i+=sizeof(square)) {
+      if (unpackGaussian(buffer, i).gid == 0u) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool containsDuplicate(poplar::Vector<float> &buffer) {
+    for (auto i = 0; i < buffer.size(); i+=sizeof(square)) {
+      auto sq = unpackGaussian(buffer, i);
+      for (auto j = i+sizeof(square); j < buffer.size(); j+=sizeof(square)) {
+        if (sq.gid == unpackGaussian(buffer, j).gid && sq.gid != 0u) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   bool compute(unsigned workerId) {
     if (workerId != 0) {
       return true;
@@ -327,7 +318,7 @@ public:
    
     if (tile_id[0] == 700) {
 
-      if (gaussiansInitialised <  1) {//vertsIn.size() / sizeof(square)) {
+      if (gaussiansInitialised < 1) {//vertsIn.size() / sizeof(square)) {
         // printf("tile_id: %d\n", tile_id[0]);
 
         // initialise the gaussians from the pts
@@ -349,7 +340,10 @@ public:
     readBuffer(upIn, m, tb, vp);
     readBuffer(downIn, m, tb, vp);
 
+
     renderStored(squares, m, tb, vp);
+
+
     return true;
   }
  
