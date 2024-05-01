@@ -76,7 +76,7 @@ public:
     pt.y = floor(pt.y - tlBound.y);
   }
 
-  bool insert(poplar::Vector<float> &buffer, unsigned idx, struct square& sq) {
+  bool insertAt(poplar::Vector<float> &buffer, unsigned idx, struct square& sq) {
     if (idx + sizeof(square) > buffer.size()) {
       return false;
     }
@@ -86,7 +86,8 @@ public:
     return true;
   }
 
-  bool insert(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx, struct square& sq) {
+  bool insertAt(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx, struct square& sq) {
+
     if (idx + sizeof(square) > buffer.size()) {
       return false;
     }
@@ -94,6 +95,41 @@ public:
     memcpy((void *) &buffer[idx+sizeof(sq.centre)], &sq.colour, sizeof(sq.colour));
     memcpy((void *) &buffer[idx+sizeof(sq.centre)+sizeof(sq.colour)], &sq.gid, sizeof(sq.gid));
     return true;
+  }
+
+  bool insert(poplar::Input<poplar::Vector<float>> &buffer, struct square& sq) {
+    for (auto i = 0; i < buffer.size(); i+=sizeof(square)) {
+      if (unpackGaussian(buffer, i).gid == 0u) {
+        for (auto j = i + sizeof(square); j < buffer.size(); j+=sizeof(square)) {
+          if (unpackGaussian(buffer, j).gid == sq.gid) {
+            return false;
+          }
+        }
+        return insertAt(buffer, i, sq);
+      }
+    }
+    return false;
+  }
+
+  bool insert(poplar::Output<poplar::Vector<float>> &buffer, struct square& sq) {
+    for (auto i = 0; i < buffer.size(); i+=sizeof(square)) {
+      auto gid = unpackGaussian(buffer, i).gid;
+
+      if (gid == sq.gid) {
+        return false;
+      }
+      // printf("gid: %d, inserting %d\n", gid, sq.gid);
+      if (gid == 0u) {
+        for (auto j = i; j < buffer.size(); j+=sizeof(square)) {
+          auto gid2 = unpackGaussian(buffer, j).gid;
+          if (gid2 == sq.gid) {
+            return false;
+          }
+        }
+        return insertAt(buffer, i, sq);
+      }
+    }
+    return false;
   }
 
   square unpackGaussian(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx) {
@@ -134,7 +170,7 @@ public:
   void evict(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx) {
     struct square sq;
     sq.gid = 0;
-    insert(buffer, idx, sq);
+    insertAt(buffer, idx, sq);
   }
 
   bool hasCopyIn(struct square& sq, poplar::Input<poplar::Vector<float>> &buffer) {
@@ -149,57 +185,50 @@ public:
 
   void send(struct square &sq, directions dirs) {
 
-     auto hasCopy = [this](struct square& sq, poplar::Output<poplar::Vector<float>> &buffer) {
-      for (auto i = 0; i < buffer.size(); i+=sizeof(square)) {
-        struct square sq2 = unpackGaussian(buffer, i);
-        if (sq2.gid == sq.gid) {
-          return true;
-        }
-      }
-      return false;
-    };
-
-    if (dirs.right && squaresSentRight < rightOut.size() && !hasCopy(sq, rightOut)) {
-      insert(rightOut, squaresSentRight, sq);
-      squaresSentRight+=sizeof(square);
+    // printf("Directions right: %d, left: %d, up: %d, down: %d\n", dirs.right, dirs.left, dirs.up, dirs.down);
+    if (dirs.right) {
+      insert(rightOut, sq);
+    }
+    if (dirs.left) {
+      insert(leftOut, sq);
+    }
+    if (dirs.up) {
+      insert(upOut, sq);
+    }
+    if (dirs.down) {
+      insert(downOut, sq);
     }
 
-    if (dirs.left && squaresSentLeft < leftOut.size() && !hasCopy(sq, leftOut)) {
-      insert(leftOut, squaresSentLeft, sq);
-      squaresSentLeft+=sizeof(square);
-    }
+    //  auto hasCopy = [this](struct square& sq, poplar::Output<poplar::Vector<float>> &buffer) {
+    //   for (auto i = 0; i < buffer.size(); i+=sizeof(square)) {
+    //     struct square sq2 = unpackGaussian(buffer, i);
+    //     if (sq2.gid == sq.gid) {
+    //       return true;
+    //     }
+    //   }
+    //   return false;
+    // };
 
-    if (dirs.up && squaresSentUp < upOut.size() && !hasCopy(sq, upOut)) {
-      insert(upOut, squaresSentUp, sq);
-      squaresSentUp+=sizeof(square);
-    }
+    // if (dirs.right && squaresSentRight < rightOut.size() && !hasCopy(sq, rightOut)) {
+    //   insertAt(rightOut, squaresSentRight, sq);
+    //   squaresSentRight+=sizeof(square);
+    // }
 
-    if (dirs.down && squaresSentDown < downOut.size() && !hasCopy(sq, downOut)) {
-      insert(downOut, squaresSentDown, sq);
-      squaresSentDown+=sizeof(square);
-    }
+    // if (dirs.left && squaresSentLeft < leftOut.size() && !hasCopy(sq, leftOut)) {
+    //   insertAt(leftOut, squaresSentLeft, sq);
+    //   squaresSentLeft+=sizeof(square);
+    // }
 
-  }
+    // if (dirs.up && squaresSentUp < upOut.size() && !hasCopy(sq, upOut)) {
+    //   insertAt(upOut, squaresSentUp, sq);
+    //   squaresSentUp+=sizeof(square);
+    // }
 
-  bool storeOnTile(struct square &sq) {
+    // if (dirs.down && squaresSentDown < downOut.size() && !hasCopy(sq, downOut)) {
+    //   insertAt(downOut, squaresSentDown, sq);
+    //   squaresSentDown+=sizeof(square);
+    // }
 
-    for (auto i = 0; i < squares.size(); i+=sizeof(square)) {
-      struct square sq2 = unpackGaussian(squares, i);
-      if (sq2.gid == 0u) {
-        return insert(squares, i, sq);
-      }
-    }
-
-    // check i + sizeof(square) < vertsIn.size() because verts in is not multiple of square size
-    for (auto i = 0; i + sizeof(square) < vertsIn.size(); i+=sizeof(square)) {
-      struct square sq2 = unpackGaussian(vertsIn, i);
-      if (sq2.gid == 0u) {
-        return insert(vertsIn, i, sq);
-      }
-    }
-
-
-    return false;
   }
 
   void clearFb() {
@@ -217,11 +246,13 @@ public:
     auto [tlBound, brBound] = tb;
 
     // loop over the points originally stored on this tile and initialise the gaussians
-    for (auto i = 0; i < vertsIn.size(); i+=4) {
+    for (auto i = 0; i < 4; i+=4) { //vertsIn.size(); i+=4) {
       auto upt = glm::make_vec4(&vertsIn[i]);
 
       // give point a square extent
       glm::vec2 centre2D = vp.clipSpaceToViewport(m * upt);
+      printf("centre2D: %f %f\n", centre2D.x, centre2D.y);
+      printf("bounds: %f %f %f %f\n", tlBound.x, tlBound.y, brBound.x, brBound.y);
       ivec2 topleft = {centre2D.x - (EXTENT / 2.0f), centre2D.y - (EXTENT / 2.0f)};
       ivec2 bottomright = {centre2D.x + (EXTENT / 2.0f), centre2D.y + (EXTENT / 2.0f)};
 
@@ -236,22 +267,7 @@ public:
       send(sq, dirs);
 
       if (dirs.keep) {
-        
-        for (auto s = 0u; s < squares.size(); s+=sizeof(square)) {
-          struct square sq2 = unpackGaussian(squares, s);
-          if (sq2.gid == 0u) {
-            insert(squares, s, sq);
-            break;
-          }
-        }
-
-        // check i + sizeof(square) < vertsIn.size() because verts in is not multiple of square size
-        // for (auto t = 0u; t < i && t + sizeof(square) < vertsIn.size(); t+=sizeof(square)) {
-        //   struct square sq2 = unpackGaussian(vertsIn, t);
-        //   if (sq2.gid == 0u) {
-        //     insert(vertsIn, t, sq);
-        //   }
-        // }
+        insertAt(squares, gaussiansInitialised * sizeof(square), sq);
       }
 
       gaussiansInitialised++;
@@ -268,6 +284,12 @@ public:
         break;
       }
 
+      for (auto i = 0; i < localFb.size(); i+=4) {
+        auto green = glm::vec4(0.0f, .2f, 0.0f, 0.0f);
+        memcpy(&localFb[i], glm::value_ptr(green), sizeof(green));
+      }
+
+
       auto upt = glm::vec4(sq.centre.x, sq.centre.y, sq.centre.z, sq.centre.w);
       glm::vec2 centre2D = vp.clipSpaceToViewport(m * upt);
       // give point a square extent
@@ -282,15 +304,12 @@ public:
       viewspaceToTile(topleft, tlBound);
       viewspaceToTile(bottomright, tlBound);
 
+      sq.colour = {1.0f, 0.0f, 1.0f, 0.0f};
 
-      if (dirs.keep && !hasCopyIn(sq, squares)) { 
-        for (auto s = 0u; s < squares.size(); s+=sizeof(square)) {
-          struct square sq2 = unpackGaussian(squares, s);
-          if (sq2.gid == 0u) {
-            insert(squares, s, sq);
-            break;
-          }
-        }
+
+      if (dirs.keep) { 
+        splat(sq.colour, topleft, bottomright);
+        insert(squares, sq);
       } 
       send(sq, dirs);
     }
@@ -319,12 +338,12 @@ public:
       viewspaceToTile(topleft, tlBound);
       viewspaceToTile(bottomright, tlBound);
 
-      if (dirs.keep) {
-        splat(sq.colour, topleft, bottomright);
-      } else {
-        evict(bufferIn, i);
-      }
+      splat(sq.colour, topleft, bottomright);
       send(sq, dirs);
+
+      if (!dirs.keep) {
+        evict(bufferIn, i);
+      } 
 
     }
   }
@@ -333,6 +352,7 @@ public:
     if (workerId != 0) {
       return true;
     }
+
 
     // construct mapping from tile to framebuffer
     const TiledFramebuffer fbMapping(IPU_TILEWIDTH, IPU_TILEHEIGHT);
@@ -345,13 +365,18 @@ public:
 
     ivec4 tidColour = {0.0f, 1.0f, tile_id[0] * (1.0f / fbMapping.numTiles), 0.0f};
 
+   
+    if (tile_id[0] == 700) {
 
-    if (gaussiansInitialised < vertsIn.size() / sizeof(square)) {
-      // initialise the gaussians from the pts
-      // sends gaussians to other tiles, or stores in local memory
-      // recover the original vector for extra gaussian storage
-      initGaussians(tidColour, m, tb, vp);
-    } 
+      if (gaussiansInitialised < 1) {// vertsIn.size() / sizeof(square)) {
+        printf("tile_id: %d\n", tile_id[0]);
+
+        // initialise the gaussians from the pts
+        // sends gaussians to other tiles, or stores in local memory
+        // recover the original vector for extra gaussian storage
+        initGaussians(tidColour, m, tb, vp);
+      } 
+    }
 
     // render anything inside the local tile memory
     // renderStored(vertsIn, m, tb, vp);
@@ -360,6 +385,7 @@ public:
     // project and clip, 
     // send to other tiles if need 
     renderStored(squares, m, tb, vp);
+
     readBuffer(rightIn, m, tb, vp);
     readBuffer(leftIn, m, tb, vp);
     readBuffer(upIn, m, tb, vp);
