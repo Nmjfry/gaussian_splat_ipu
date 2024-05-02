@@ -157,6 +157,27 @@ public:
     }
   }
 
+  enum dir {
+    left,
+    right,
+    up,
+    down
+  };
+
+  void sendOnce(struct square &sq, directions possibleDirs, dir recievedDirection) {
+    if (recievedDirection != dir::right && possibleDirs.right) {
+      insert(rightOut, sq);
+    } else if (recievedDirection != dir::left && possibleDirs.left) {
+      insert(leftOut, sq);
+    } else if (recievedDirection != dir::up && possibleDirs.up) {
+      insert(upOut, sq);
+    } else if (recievedDirection != dir::down && possibleDirs.down) {
+      insert(downOut, sq);
+    } else {
+      insert(squares, sq);
+    }
+  }
+
   void clearFb() {
     for (auto i = 0; i < localFb.size(); i+=4) {
       auto black = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -197,7 +218,9 @@ public:
 
   }
 
-  void readBuffer(poplar::Input<poplar::Vector<float>> &bufferIn, const glm::mat4& m, const std::pair<ivec2, ivec2> tb, const splat::Viewport& vp) {
+ 
+
+  void readBuffer(poplar::Input<poplar::Vector<float>> &bufferIn, dir direction, const glm::mat4& m, const std::pair<ivec2, ivec2> tb, const splat::Viewport& vp) {
     auto [tlBound, brBound] = tb;
 
     for (auto i = 0; i < bufferIn.size(); i+=sizeof(square)) {
@@ -231,8 +254,10 @@ public:
       if (dirs.keep) { 
         // splat(sq.colour, topleft, bottomright);
         insert(squares, sq);
-      } 
-      send(sq, dirs);
+        send(sq, dirs);
+      }  else { 
+        sendOnce(sq, dirs, direction);
+      }
     }
   }
 
@@ -335,10 +360,11 @@ public:
     // project and clip, 
     // send to other tiles if need 
 
-    readBuffer(rightIn, m, tb, vp);
-    readBuffer(leftIn, m, tb, vp);
-    readBuffer(upIn, m, tb, vp);
-    readBuffer(downIn, m, tb, vp);
+    readBuffer(rightIn, dir::right, m, tb, vp);
+    readBuffer(leftIn, dir::left, m, tb, vp);
+    readBuffer(upIn, dir::up, m, tb, vp);
+    readBuffer(downIn, dir::down, m, tb, vp);
+
 
 
     renderStored(squares, m, tb, vp);
