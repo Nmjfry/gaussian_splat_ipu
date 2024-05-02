@@ -155,6 +155,9 @@ public:
     if (dirs.down) {
       insert(downOut, sq);
     }
+    if (!dirs.down && !dirs.up && !dirs.left && !dirs.right) {
+      insert(squares, sq);
+    }
   }
 
   enum dir {
@@ -285,11 +288,11 @@ public:
       viewspaceToTile(bottomright, tlBound);
 
       splat(sq.colour, topleft, bottomright);
-      send(sq, dirs);
 
       if (!dirs.keep) {
         evict(bufferIn, i);
       } 
+      send(sq, dirs);
 
     }
   }
