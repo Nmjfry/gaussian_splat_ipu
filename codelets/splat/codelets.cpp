@@ -192,7 +192,7 @@ public:
     auto [tlBound, brBound] = tb;
 
     // loop over the points originally stored on this tile and initialise the gaussians
-    for (auto i = 0; i < 1; i+=4) {// vertsIn.size(); i+=4) {
+    for (auto i = 0; i < vertsIn.size(); i+=4) {
       auto upt = glm::make_vec4(&vertsIn[i]);
 
       // give point a square extent
@@ -234,10 +234,10 @@ public:
       // printf("gid: %d\n", sq.gid);
       // printf("loc in buffer %d\n", i);
 
-      for (auto i = 0; i < localFb.size(); i+=4) {
-        auto green = glm::vec4(0.0f, .2f, 0.0f, 0.0f);
-        memcpy(&localFb[i], glm::value_ptr(green), sizeof(green));
-      }
+      // for (auto i = 0; i < localFb.size(); i+=4) {
+      //   auto green = glm::vec4(0.0f, .2f, 0.0f, 0.0f);
+      //   memcpy(&localFb[i], glm::value_ptr(green), sizeof(green));
+      // }
 
 
       auto upt = glm::vec4(sq.centre.x, sq.centre.y, sq.centre.z, sq.centre.w);
@@ -254,13 +254,11 @@ public:
       viewspaceToTile(topleft, tlBound);
       viewspaceToTile(bottomright, tlBound);
 
+      splat(sq.colour, topleft, bottomright);
       if (dirs.keep) { 
-        // splat(sq.colour, topleft, bottomright);
         insert(squares, sq);
-        send(sq, dirs);
-      }  else { 
-        sendOnce(sq, dirs, direction);
-      }
+      }  
+      sendOnce(sq, dirs, direction);
     }
   }
 
@@ -344,9 +342,9 @@ public:
     ivec4 tidColour = {0.0f, 1.0f, tile_id[0] * (1.0f / fbMapping.numTiles), 0.0f};
 
    
-    if (tile_id[0] == 700) {
+    // if (tile_id[0] == 700) {
 
-      if (gaussiansInitialised < 1) {//vertsIn.size() / sizeof(square)) {
+      if (gaussiansInitialised < vertsIn.size() / sizeof(square)) {
         // printf("tile_id: %d\n", tile_id[0]);
 
         // initialise the gaussians from the pts
@@ -354,7 +352,7 @@ public:
         // recover the original vector for extra gaussian storage
         initGaussians(tidColour, m, tb, vp);
       } 
-    }
+    // }
 
     // render anything inside the local tile memory
     // renderStored(vertsIn, m, tb, vp);
@@ -368,7 +366,9 @@ public:
     readBuffer(upIn, dir::up, m, tb, vp);
     readBuffer(downIn, dir::down, m, tb, vp);
 
-
+    // if (isFull(squares) || isFull(rightOut) || isFull(leftOut) || isFull(upOut) || isFull(downOut)) {
+    //   printf("full\n");
+    // }
 
     renderStored(squares, m, tb, vp);
 
