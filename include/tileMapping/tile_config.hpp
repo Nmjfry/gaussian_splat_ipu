@@ -1,6 +1,7 @@
 #pragma once
 
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #define IMWIDTH 1280.0f
 #define IMHEIGHT 720.0f
@@ -36,6 +37,14 @@ struct ivec2 {
 };
 
 typedef struct ivec2 ivec2;
+
+struct ivec3 {
+  float x;
+  float y;
+  float z;
+};
+
+typedef struct ivec3 ivec3;
 
 enum class Direction {
   UP,
@@ -168,4 +177,44 @@ struct square {
     }
     return dirs;
   }
+};
+
+struct Gaussian {
+    float position[3];  // in world space
+    float f_dc[3];  // first order spherical harmonics coeff (sRGB color space)
+    float f_rest[45];  // more spherical harminics coeff
+    ivec4 colour;
+    float scale[3];
+    float rot[4];  // local rotation of guassian (real, i, j, k)
+
+    // convert from (scale, rot) into the gaussian covariance matrix in world space
+    // See 3d Gaussian Splat paper for more info
+    glm::mat3 ComputeCovMat() const
+    {
+        glm::quat q(rot[0], rot[1], rot[2], rot[3]);
+        glm::mat3 R(glm::normalize(q));
+        glm::mat3 S(glm::vec3(expf(scale[0]), 0.0f, 0.0f),
+                    glm::vec3(0.0f, expf(scale[1]), 0.0f),
+                    glm::vec3(0.0f, 0.0f, expf(scale[2])));
+        return R * S * glm::transpose(S) * glm::transpose(R);
+    }
+};
+
+struct Gaussian2D {
+    ivec2 mean;  // in world space
+    ivec2 scale;
+    ivec4 rot;  // local rotation of gaussian (real, i, j, k)
+    ivec4 colour; // RGBA color space
+
+    // convert from (scale, rot) into the gaussian covariance matrix in world space
+    // See 3d Gaussian Splat paper for more info
+    glm::mat3 ComputeCovMat() const
+    {
+        glm::quat q(rot.x, rot.y, rot.z, rot.w);
+        glm::mat3 R(glm::normalize(q));
+        glm::mat3 S(glm::vec3(expf(scale.x), 0.0f, 0.0f),
+                    glm::vec3(0.0f, expf(scale.y), 0.0f),
+                    glm::vec3(0.0f, 0.0f, 1.f));
+        return R * S * glm::transpose(S) * glm::transpose(R);
+    }
 };
