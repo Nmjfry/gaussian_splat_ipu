@@ -49,7 +49,6 @@ public:
 
   poplar::InOut<poplar::Vector<float>> squares;
 
-
   unsigned gaussiansInitialised = 0;
 
   unsigned toByteBufferIndex(float x, float y) {
@@ -72,9 +71,8 @@ public:
     }
   }
 
-  void viewspaceToTile(ivec2& pt, ivec2 tlBound) {
-    pt.x = floor(pt.x - tlBound.x);
-    pt.y = floor(pt.y - tlBound.y);
+  ivec2 viewspaceToTile(const ivec2& pt, ivec2 tlBound) {
+    return {floor(pt.x - tlBound.x), floor(pt.y - tlBound.y)};
   }
 
   bool insertAt(poplar::Vector<float> &buffer, unsigned idx, struct square& sq) {
@@ -142,6 +140,13 @@ public:
     insertAt(buffer, idx, sq);
   }
 
+  enum dir {
+    left,
+    right,
+    up,
+    down
+  };
+
   void send(struct square &sq, directions dirs) {
     if (dirs.right) {
       insert(rightOut, sq);
@@ -160,13 +165,6 @@ public:
     }
   }
 
-  enum dir {
-    left,
-    right,
-    up,
-    down
-  };
-
   void sendOnce(struct square &sq, directions possibleDirs, dir recievedDirection) {
     if (recievedDirection != dir::right && possibleDirs.right) {
       insert(rightOut, sq);
@@ -181,10 +179,9 @@ public:
     }
   }
 
-  void clearFb() {
+  void colourFb(const ivec4 &colour) {
     for (auto i = 0; i < localFb.size(); i+=4) {
-      auto black = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
-      memcpy(&localFb[i], glm::value_ptr(black), sizeof(black));
+      memcpy(&localFb[i], &colour, sizeof(colour));
     }
   }
 
@@ -192,13 +189,11 @@ public:
     auto [tlBound, brBound] = tb;
 
     // loop over the points originally stored on this tile and initialise the gaussians
-    for (auto i = 0; i < vertsIn.size(); i+=4) {
+    for (auto i = 0; i < vertsIn.size(); i+=4, gaussiansInitialised++) {
       auto upt = glm::make_vec4(&vertsIn[i]);
 
       // give point a square extent
       glm::vec2 centre2D = vp.clipSpaceToViewport(m * upt);
-      // printf("centre2D: %f %f\n", centre2D.x, centre2D.y);
-      // printf("bounds: %f %f %f %f\n", tlBound.x, tlBound.y, brBound.x, brBound.y);
       ivec2 topleft = {centre2D.x - (EXTENT / 2.0f), centre2D.y - (EXTENT / 2.0f)};
       ivec2 bottomright = {centre2D.x + (EXTENT / 2.0f), centre2D.y + (EXTENT / 2.0f)};
 
@@ -210,14 +205,12 @@ public:
       sq.centre = {upt.x, upt.y, upt.z, upt.w};
       sq.gid = (i/4)+1+tile_id[0]*vertsIn.size(); // give unique gaussian id
       sq.colour = colour;
-      send(sq, dirs);
 
+      send(sq, dirs);
       if (dirs.keep) {
         insertAt(squares, gaussiansInitialised * sizeof(square), sq);
       }
-
-      gaussiansInitialised++;
-     }
+    }
 
   }
 
@@ -231,14 +224,9 @@ public:
       if (sq.gid == 0u) {
         break;
       }
-      // printf("gid: %d\n", sq.gid);
-      // printf("loc in buffer %d\n", i);
 
-      // for (auto i = 0; i < localFb.size(); i+=4) {
-      //   auto green = glm::vec4(0.0f, .2f, 0.0f, 0.0f);
-      //   memcpy(&localFb[i], glm::value_ptr(green), sizeof(green));
-      // }
-
+      const ivec4 green = {0.0f, 0.2f, 0.0f, 0.0f};
+      colourFb(green);
 
       auto upt = glm::vec4(sq.centre.x, sq.centre.y, sq.centre.z, sq.centre.w);
       glm::vec2 centre2D = vp.clipSpaceToViewport(m * upt);
@@ -251,10 +239,10 @@ public:
       auto dirs = square::clip(tlBound, brBound, topleft, bottomright);
 
       // set the topleft and bottomright to be relative to the tile
-      viewspaceToTile(topleft, tlBound);
-      viewspaceToTile(bottomright, tlBound);
+      ivec2 tlTileCoords = viewspaceToTile(topleft, tlBound);
+      ivec2 brTileCoords = viewspaceToTile(bottomright, tlBound);
 
-      splat(sq.colour, topleft, bottomright);
+      splat(sq.colour, tlTileCoords, brTileCoords);
       if (dirs.keep) { 
         insert(squares, sq);
       }  
@@ -282,10 +270,10 @@ public:
       auto dirs = square::clip(tlBound, brBound, topleft, bottomright);
 
       // set the topleft and bottomright to be relative to the tile
-      viewspaceToTile(topleft, tlBound);
-      viewspaceToTile(bottomright, tlBound);
+      ivec2 tlTileCoords = viewspaceToTile(topleft, tlBound);
+      ivec2 brTileCoords = viewspaceToTile(bottomright, tlBound);
 
-      splat(sq.colour, topleft, bottomright);
+      splat(sq.colour, tlTileCoords, brTileCoords);
 
       if (!dirs.keep) {
         evict(bufferIn, i);
@@ -320,59 +308,43 @@ public:
     if (workerId != 0) {
       return true;
     }
-
-
     // construct mapping from tile to framebuffer
     const TiledFramebuffer fbMapping(IPU_TILEWIDTH, IPU_TILEHEIGHT);
     const splat::Viewport vp(0.0f, 0.0f, IMWIDTH, IMHEIGHT);
+
     // Transpose because GLM storage order is column major:
     const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
     const auto tb = fbMapping.getTileBounds(tile_id[0]);
+    const auto initNumGaussians = vertsIn.size() / sizeof(square);
+
+    ivec4 tidColour = {1.0f, 0.0f, tile_id[0] * (1.0f / fbMapping.numTiles), 0.0f};
     // zero the framebuffer and clear the send buffers
-    clearFb();
+    const ivec4 black = {0.0f, 0.0f, 0.0f, 0.0f};
+    colourFb(black);
 
     //clear all of the out buffers:
-    for (auto i = 0; i < rightOut.size(); i+=sizeof(square)) {
-      evict(rightOut, i);
-      evict(leftOut, i);
-      evict(upOut, i);
-      evict(downOut, i);
+    for (auto i = 0; i < rightOut.size(); i++) {
+      memset(&rightOut[i], 0, sizeof(float));
+      memset(&leftOut[i], 0, sizeof(float));
+      memset(&upOut[i], 0, sizeof(float));
+      memset(&downOut[i], 0, sizeof(float));
     }
-
-    ivec4 tidColour = {0.0f, 1.0f, tile_id[0] * (1.0f / fbMapping.numTiles), 0.0f};
-
    
-    // if (tile_id[0] == 700) {
-
-      if (gaussiansInitialised < vertsIn.size() / sizeof(square)) {
-        // printf("tile_id: %d\n", tile_id[0]);
-
-        // initialise the gaussians from the pts
-        // sends gaussians to other tiles, or stores in local memory
-        // recover the original vector for extra gaussian storage
-        initGaussians(tidColour, m, tb, vp);
-      } 
-    // }
-
-    // render anything inside the local tile memory
-    // renderStored(vertsIn, m, tb, vp);
-
+    if (gaussiansInitialised < initNumGaussians) {
+      // initialise the gaussians from the pts
+      // sends gaussians to other tiles, or stores in local memory
+      // recover the original vector for extra gaussian storage
+      initGaussians(tidColour, m, tb, vp);
+    } 
+    
     // read the gaussians from the send buffers,
-    // project and clip, 
-    // send to other tiles if need 
-
+    // project and clip, send to other tiles if need 
     readBuffer(rightIn, dir::right, m, tb, vp);
     readBuffer(leftIn, dir::left, m, tb, vp);
     readBuffer(upIn, dir::up, m, tb, vp);
     readBuffer(downIn, dir::down, m, tb, vp);
 
-    // if (isFull(squares) || isFull(rightOut) || isFull(leftOut) || isFull(upOut) || isFull(downOut)) {
-    //   printf("full\n");
-    // }
-
     renderStored(squares, m, tb, vp);
-
-
     return true;
   }
  
