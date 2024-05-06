@@ -7,7 +7,6 @@
 #include <poputil/TileMapping.hpp>
 #include <tileMapping/tile_config.hpp>
 #include <string>
-#include <queue>
 
 namespace splat {
 
@@ -25,8 +24,6 @@ class EdgeBuilder{
 public:
   EdgeBuilder(poplar::Graph& vg, std::vector<poplar::VertexRef>& vertices, std::size_t channelSize);
   virtual ~EdgeBuilder() {}
-
-  // std::pair<directions, directions> getFreeNeighbouringEdges(unsigned tid);
   
   void addBidirectionalEdge(unsigned tid1, unsigned tid2, struct edge e1, struct edge e2);
   void addEdge(unsigned tid1, unsigned tid2, struct edge edge);

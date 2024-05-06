@@ -33,7 +33,7 @@ void addOptions(boost::program_options::options_description& desc) {
    "Disable use of optimised AMP codelets.");
 }
 
-std::unique_ptr<splat::IpuSplatter> createIpuBuilder(const splat::Points& pts, TiledFramebuffer& fb, bool useAMP) {
+std::unique_ptr<splat::IpuSplatter> createIpuBuilder(const splat::Points& pts, splat::TiledFramebuffer& fb, bool useAMP) {
   using namespace poplar;
 
   ipu_utils::RuntimeConfig defaultConfig {
@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
 
 
   // Construct some tiled framebuffer histograms:
-  TiledFramebuffer fb(imagePtr->cols, imagePtr->rows, IPU_TILEWIDTH, IPU_TILEHEIGHT);
+  splat::TiledFramebuffer fb(imagePtr->cols, imagePtr->rows, IPU_TILEWIDTH, IPU_TILEHEIGHT);
   auto pointCounts = std::vector<std::uint32_t>(fb.numTiles, 0u);
 
   auto num_pixels = imagePtr->rows * imagePtr->cols;
@@ -133,7 +133,7 @@ int main(int argc, char** argv) {
 
   std::vector<glm::vec4> clipSpace;
   clipSpace.reserve(pts.size());
-  TiledFramebuffer cpufb(CPU_TILEWIDTH, CPU_TILEHEIGHT);
+  splat::TiledFramebuffer cpufb(CPU_TILEWIDTH, CPU_TILEHEIGHT);
   splat::Viewport vp(0.f, 0.f, IMWIDTH, IMHEIGHT);
 
   // Video is encoded and sent in a separate thread:

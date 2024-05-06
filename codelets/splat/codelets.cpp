@@ -8,6 +8,9 @@
 #include <glm/gtc/type_ptr.hpp>
 #include </home/nf20/workspace/gaussian_splat_ipu/include/tileMapping/tile_config.hpp>
 #include </home/nf20/workspace/gaussian_splat_ipu/include/splat/viewport.hpp>
+#include </home/nf20/workspace/gaussian_splat_ipu/include/splat/ipu_geometry.hpp>
+
+using namespace splat;
 
 #ifdef __IPU__
 #include <ipu_vector_math>
