@@ -15,13 +15,17 @@ namespace splat {
 // Fwd decls:
 class Point3f;
 typedef std::vector<Point3f> Points;
+typedef std::vector<Gaussian2D> Gaussians;
 
 class IpuSplatter : public ipu_utils::BuilderInterface {
 public:
   IpuSplatter(const Points& pts, TiledFramebuffer& fb, bool noAMP);
+  IpuSplatter(const Gaussians& gsns, TiledFramebuffer& fb, bool noAMP);
+
   virtual ~IpuSplatter() {}
 
   void updateModelViewProjection(const glm::mat4& mvp);
+  void updateGaussianParams(const Gaussian2D& g);
   void getProjectedPoints(std::vector<glm::vec4>& pts) const;
   void getFrameBuffer(cv::Mat &frame) const;
 

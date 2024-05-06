@@ -39,12 +39,72 @@ IpuSplatter::IpuSplatter(const Points& verts, TiledFramebuffer& fb, bool noAMP)
   printf("Fb size: %luB\n", frameBuffer.size());
 }
 
+IpuSplatter::IpuSplatter(const Gaussians& verts, TiledFramebuffer& fb, bool noAMP)
+  : modelViewProjection("mvp"), inputVertices("verts_in"), outputFramebuffer("frame_buffer"), 
+    transformMatrix(16),
+    initialised(false),
+    disableAMPVertices(noAMP),
+    fbMapping(fb)
+{
+  hostVertices.reserve(GAUSSIAN_SIZE * verts.size());
+  printf("num verts in: %lu, elemsize: %lu \n", verts.size(), GAUSSIAN_SIZE);
+  for (const auto& v : verts) {
+    hostVertices.push_back(v.mean.x);
+    hostVertices.push_back(v.mean.y);
+    hostVertices.push_back(v.mean.z);
+    hostVertices.push_back(v.mean.w);
+    hostVertices.push_back(v.scale.x);
+    hostVertices.push_back(v.scale.y);
+    hostVertices.push_back(v.rot.x);
+    hostVertices.push_back(v.rot.y);
+    hostVertices.push_back(v.rot.z);
+    hostVertices.push_back(v.rot.w);
+    hostVertices.push_back(v.colour.x);
+    hostVertices.push_back(v.colour.y);
+    hostVertices.push_back(v.colour.z);
+    hostVertices.push_back(v.colour.w);
+  }
+  frameBuffer.reserve(fb.width * fb.height * GAUSSIAN_SIZE);
+  for (uint i = 0; i < fb.width * fb.height; ++i) {
+    frameBuffer.push_back(0.0);
+    frameBuffer.push_back(0.0);
+    frameBuffer.push_back(0.0);
+    frameBuffer.push_back(0.0);
+  }
+  printf("Fb size: %luB\n", frameBuffer.size());
+}
+
 void IpuSplatter::updateModelViewProjection(const glm::mat4& mvp) {
   auto mvpt = glm::transpose(mvp);
   auto ptr = (const float*)glm::value_ptr(mvpt);
   for (auto i = 0u; i < transformMatrix.size(); ++i) {
     transformMatrix[i] = *ptr;
     ptr += 1;
+  }
+}
+
+void IpuSplatter::updateGaussianParams(const Gaussian2D& g) {
+  for (auto i = 0u; i < hostVertices.size(); i+=14) {
+    // ivec4 mean; // in world space
+    // ivec4 colour; // RGBA colour space
+    // unsigned gid;
+    // ivec2 scale;
+    // ivec4 rot;  // local rotation of gaussian (real, i, j, k)
+    hostVertices[i] = g.mean.x;
+    hostVertices[i + 1] = g.mean.y;
+    hostVertices[i + 2] = g.mean.z;
+    hostVertices[i + 3] = g.mean.w;
+    hostVertices[i + 4] = g.colour.x;
+    hostVertices[i + 5] = g.colour.y;
+    hostVertices[i + 6] = g.colour.z;
+    hostVertices[i + 7] = g.colour.w;
+    hostVertices[i + 8] = g.gid;
+    hostVertices[i + 9] = g.scale.x;
+    hostVertices[i + 10] = g.scale.y;
+    hostVertices[i + 11] = g.rot.x;
+    hostVertices[i + 12] = g.rot.y;
+    hostVertices[i + 13] = g.rot.z;
+    hostVertices[i + 14] = g.rot.w;
   }
 }
 
@@ -215,18 +275,18 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
   // MappingInfo{padding, std::size_t(elementsPerTile), std::size_t(fullTiles)};
 
-
+  printf("hostvertices size: %lu, numtiles %f\n", hostVertices.size(), fbMapping.numTiles);
   auto numElemsPerTile = std::floor(hostVertices.size() / fbMapping.numTiles); // lower bound
   auto remainingElements = hostVertices.size() - (numElemsPerTile * fbMapping.numTiles);
   auto paddedRemainder = std::ceil(remainingElements / grainSize) * grainSize;
   auto padding = paddedRemainder - remainingElements;
 
   printf("numElemsPerTile: %f, remainingElements : %f, padding: %f\n", numElemsPerTile, remainingElements, padding);
-  // auto mapping = MappingInfo{std::size_t(padding), std::size_t(numElemsPerTile), std::size_t(fbMapping.numTiles)};
+  auto mapping = MappingInfo{std::size_t(padding), std::size_t(numElemsPerTile), std::size_t(fbMapping.numTiles)};
   
-  // mapping.totalTiles = mapping.totalTiles > 1439 ? 1439 : mapping.totalTiles;
+  mapping.totalTiles = mapping.totalTiles > 1439 ? 1439 : mapping.totalTiles;
 
-  auto mapping = calculateMapping(vg, hostVertices.size(), grainSize, fbMapping);
+  // auto mapping = calculateMapping(vg, hostVertices.size(), grainSize, fbMapping);
   printf("Vertex layout: %lu, %lu, %lu\n", mapping.padding, mapping.elementsPerTile, mapping.totalTiles);
   auto paddedInput = vg.addVariable(FLOAT, {hostVertices.size() + mapping.padding}, "padded_verts_in");
   applyTileMapping(vg, paddedInput, mapping);
@@ -343,14 +403,15 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
   program::Sequence main;
   main.add(broadcastMvp);
-  main.add(broadcastPoints);
+  // main.add(broadcastPoints);
+  main.add(inputVertices.buildWrite(vg, true));
   main.add(program::Execute(splatCs));
   main.add(outputFramebuffer.buildRead(vg, true));
 
-  program::Sequence setup;
-  setup.add(inputVertices.buildWrite(vg, true));
+  // program::Sequence setup;
+  // main.add(inputVertices.buildWrite(vg, true));
 
-  getPrograms().add("write_verts", setup);
+  // getPrograms().add("write_verts", setup);
   getPrograms().add("project", main);
 }
 
@@ -360,9 +421,8 @@ void IpuSplatter::execute(poplar::Engine& engine, const poplar::Device& device) 
     modelViewProjection.connectWriteStream(engine, transformMatrix);
     inputVertices.connectWriteStream(engine, hostVertices);
     outputFramebuffer.connectReadStream(engine, frameBuffer);
-    getPrograms().run(engine, "write_verts");
+    // getPrograms().run(engine, "write_verts");
   }
-
   getPrograms().run(engine, "project");
 }
 

@@ -14,6 +14,8 @@
 #include <splat/file_io.hpp>
 #include <splat/serialise.hpp>
 
+#include <splat/ipu_geometry.hpp>
+
 #include <remote_ui/InterfaceServer.hpp>
 #include <remote_ui/AsyncTask.hpp>
 
@@ -34,6 +36,21 @@ void addOptions(boost::program_options::options_description& desc) {
 }
 
 std::unique_ptr<splat::IpuSplatter> createIpuBuilder(const splat::Points& pts, splat::TiledFramebuffer& fb, bool useAMP) {
+  using namespace poplar;
+
+  ipu_utils::RuntimeConfig defaultConfig {
+    1, 1, // numIpus, numReplicas
+    "ipu_splatter", // exeName
+    false, false, false, // useIpuModel, saveExe, loadExe
+    false, true // compileOnly, deferredAttach
+  };
+
+  auto ipuSplatter = std::make_unique<splat::IpuSplatter>(pts, fb, useAMP);
+  ipuSplatter->setRuntimeConfig(defaultConfig);
+  return ipuSplatter;
+}
+
+std::unique_ptr<splat::IpuSplatter> createIpuBuilder(const splat::Gaussians& pts, splat::TiledFramebuffer& fb, bool useAMP) {
   using namespace poplar;
 
   ipu_utils::RuntimeConfig defaultConfig {
@@ -99,7 +116,20 @@ int main(int argc, char** argv) {
   auto tileId = fb.pixCoordToTile(x, y);
   ipu_utils::logger()->info("Tile index test. Pix coord {}, {} -> tile id: {}", x, y, tileId);
 
-  auto ipuSplatter = createIpuBuilder(pts, fb, args["no-amp"].as<bool>());
+
+  // make fb.numTiles copies of a 2D gaussian
+  splat::Gaussians gsns;
+  for (std::size_t i = 0; i < fb.numTiles; ++i) {
+    splat::Gaussian2D g;
+    g.mean = {0, 0, 0, 0};
+    g.scale = {1, 1};
+    g.rot = {0, 0, 0, 1};
+    g.colour = {255, 0, 0, 255};
+    gsns.push_back(g);
+  }
+
+
+  auto ipuSplatter = createIpuBuilder(gsns, fb, args["no-amp"].as<bool>());
   ipu_utils::GraphManager gm;
   gm.compileOrLoad(*ipuSplatter);
 
@@ -156,16 +186,23 @@ int main(int argc, char** argv) {
     *imagePtr = 0;
     std::uint32_t count = 0u;
 
+    splat::Gaussian2D g;
+    g.mean = {state.X, state.Y};
+    g.scale = {state.lambda1, state.lambda2};
+    // g.rot = 
+    g.colour = {1.0f, 0.f, 0.f, 0.9f};
+
     if (state.device == "cpu") {
-      pvti::Tracepoint scoped(&traceChannel, "mvp_transform_cpu");
-      projectPoints(pts, projection, dynamicView, clipSpace);
-      {
-        pvti::Tracepoint scope(&traceChannel, "splatting_cpu");
-        count = splat::splatPoints(*imagePtr, clipSpace, pts, projection * dynamicView, cpufb, vp);
-      }
+      // pvti::Tracepoint scoped(&traceChannel, "mvp_transform_cpu");
+      // projectPoints(pts, projection, dynamicView, clipSpace);
+      // {
+      //   pvti::Tracepoint scope(&traceChannel, "splatting_cpu");
+      //   count = splat::splatPoints(*imagePtr, clipSpace, pts, projection * dynamicView, cpufb, vp);
+      // }
     } else if (state.device == "ipu") {
       pvti::Tracepoint scoped(&traceChannel, "mvp_transform_ipu");
-      ipuSplatter->updateModelViewProjection(projection * dynamicView);
+      // ipuSplatter->updateModelViewProjection(projection * dynamicView);
+      ipuSplatter->updateGaussianParams(g);
       gm.execute(*ipuSplatter);
       ipuSplatter->getFrameBuffer(*imagePtr);
     }
