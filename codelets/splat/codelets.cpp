@@ -70,16 +70,33 @@ public:
     return {floor(pt.x - tlBound.x), floor(pt.y - tlBound.y)};
   }
 
+  
+
   void splat(const Primitive &p, const ivec2& tlBound, const ivec2& brBound) {
     auto bb = p.getBoundingBox();
     bb = bb.clip(tlBound, brBound);
     auto tl = viewspaceToTile(bb.min, tlBound);
     auto br = viewspaceToTile(bb.max, tlBound);
+    ivec2 mean2D = {p.mean.x, p.mean.y};
+    auto meanVs = viewspaceToTile(mean2D, tlBound);
     for (auto i = tl.x; i < br.x; i++) {
       for (auto j = tl.y; j < br.y; j++) {
-        if (p.inside(i, j)) {
+
+      if (auto g = static_cast<const Gaussian2D*>(&p)) {
+        auto angle = 2 * ipu::acos(g->rot.w);
+        auto c = ipu::cos(angle);
+        auto s = ipu::sin(angle);
+
+        auto dd = (g->scale.x / 2) * (g->scale.x / 2);
+        auto DD = (g->scale.y / 2) * (g->scale.y / 2);
+        auto a = c * (i - meanVs.x) + s * (j - meanVs.y);
+        auto b = s * (i - meanVs.x) - c * (j - meanVs.y);
+        bool inEllipse = (((a * a) / dd) + ((b * b) / DD)) <= 1;
+
+        if (inEllipse) {
           setPixel(i, j, p.colour); 
         }
+      }
       }
     }
   }
@@ -142,13 +159,13 @@ public:
     memcpy(&gid, &buffer[idx+8], sizeof(gid));
     ivec2 scale;
     memcpy(&scale, &buffer[idx+9], sizeof(scale));
-    // printf("scale %f %f\n", scale.x, scale.y);
-    // ivec4 rot;
-    // memcpy(&rot, &buffer[idx+sizeof(mean)+sizeof(colour)+sizeof(gid)+sizeof(scale)], sizeof(rot));
+    ivec4 rot;
+    memcpy(&rot, &buffer[idx+11], sizeof(rot));
+  // printf("scale %f %f\n", scale.x, scale.y);
 
     g.mean = mean;
     g.scale = scale;
-    // g.rot = rot;
+    g.rot = rot;
     g.colour = colour;
 
     return g;

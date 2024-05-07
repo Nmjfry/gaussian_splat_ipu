@@ -217,6 +217,15 @@ struct Gaussian2D : Primitive {
 
     bool inside(float x, float y) const override {
       // glm::mat4 r = glm::toMat4(glm::quat(rot.x, rot.y, rot.z, rot.w));
+      // auto angle = 2 * ipu::acos(rot.w);
+      // auto c = glm::cos(angle);
+      // auto s = glm::sin(angle);
+
+      // auto dd = (scale.x / 2) * (scale.x / 2);
+      // auto DD = (scale.y / 2) * (scale.y / 2);
+      // auto a = c * (x - mean.x) + s * (y - mean.y);
+      // auto b = s * (x - mean.x) - c * (y - mean.y);
+      // bool inEllipse = ((a * a) / (dd + 0.1) + (b * b) / (DD + 0.1)) <= 1;
       return true;
     }
 };
