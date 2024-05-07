@@ -53,16 +53,17 @@ IpuSplatter::IpuSplatter(const Gaussians& verts, TiledFramebuffer& fb, bool noAM
     hostVertices.push_back(v.mean.y);
     hostVertices.push_back(v.mean.z);
     hostVertices.push_back(v.mean.w);
+    hostVertices.push_back(v.colour.x);
+    hostVertices.push_back(v.colour.y);
+    hostVertices.push_back(v.colour.z);
+    hostVertices.push_back(v.colour.w);
+    hostVertices.push_back(v.gid);
     hostVertices.push_back(v.scale.x);
     hostVertices.push_back(v.scale.y);
     hostVertices.push_back(v.rot.x);
     hostVertices.push_back(v.rot.y);
     hostVertices.push_back(v.rot.z);
     hostVertices.push_back(v.rot.w);
-    hostVertices.push_back(v.colour.x);
-    hostVertices.push_back(v.colour.y);
-    hostVertices.push_back(v.colour.z);
-    hostVertices.push_back(v.colour.w);
   }
   frameBuffer.reserve(fb.width * fb.height * GAUSSIAN_SIZE);
   for (uint i = 0; i < fb.width * fb.height; ++i) {
@@ -84,7 +85,7 @@ void IpuSplatter::updateModelViewProjection(const glm::mat4& mvp) {
 }
 
 void IpuSplatter::updateGaussianParams(const Gaussian2D& g) {
-  for (auto i = 0u; i < hostVertices.size(); i+=14) {
+  for (auto i = 0u; i < hostVertices.size(); i+=15) {
     // ivec4 mean; // in world space
     // ivec4 colour; // RGBA colour space
     // unsigned gid;
@@ -104,7 +105,7 @@ void IpuSplatter::updateGaussianParams(const Gaussian2D& g) {
     hostVertices[i + 11] = g.rot.x;
     hostVertices[i + 12] = g.rot.y;
     hostVertices[i + 13] = g.rot.z;
-    hostVertices[i + 14] = g.rot.w;
+    hostVertices[i + 14] = g.rot.w * glm::pi<float>() / 180.0f;
   }
 }
 

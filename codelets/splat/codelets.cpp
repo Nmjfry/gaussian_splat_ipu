@@ -79,24 +79,23 @@ public:
     auto br = viewspaceToTile(bb.max, tlBound);
     ivec2 mean2D = {p.mean.x, p.mean.y};
     auto meanVs = viewspaceToTile(mean2D, tlBound);
-    for (auto i = tl.x; i < br.x; i++) {
-      for (auto j = tl.y; j < br.y; j++) {
 
-      if (auto g = static_cast<const Gaussian2D*>(&p)) {
-        auto angle = 2 * ipu::acos(g->rot.w);
-        auto c = ipu::cos(angle);
-        auto s = ipu::sin(angle);
+    if (auto g = static_cast<const Gaussian2D*>(&p)) {
+      auto c = glm::cos(g->rot.w);
+      auto s = glm::sin(g->rot.w);
+      auto dd = (g->scale.x / 2) * (g->scale.x / 2);
+      auto DD = (g->scale.y / 2) * (g->scale.y / 2);
 
-        auto dd = (g->scale.x / 2) * (g->scale.x / 2);
-        auto DD = (g->scale.y / 2) * (g->scale.y / 2);
-        auto a = c * (i - meanVs.x) + s * (j - meanVs.y);
-        auto b = s * (i - meanVs.x) - c * (j - meanVs.y);
-        bool inEllipse = (((a * a) / dd) + ((b * b) / DD)) <= 1;
+      for (auto i = tl.x; i < br.x; i++) {
+        for (auto j = tl.y; j < br.y; j++) {
+            auto a = c * (i - meanVs.x) + s * (j - meanVs.y);
+            auto b = s * (i - meanVs.x) - c * (j - meanVs.y);
+            bool inEllipse = (((a * a) / dd) + ((b * b) / DD)) <= 1;
 
-        if (inEllipse) {
-          setPixel(i, j, p.colour); 
+            if (inEllipse) {
+              setPixel(i, j, p.colour); 
+            } 
         }
-      }
       }
     }
   }
@@ -276,7 +275,8 @@ public:
 
   void renderStored(poplar::Input<poplar::Vector<float>> &bufferIn, const glm::mat4& m, const std::pair<ivec2, ivec2> tb, const splat::Viewport& vp) {
     auto [tlBound, brBound] = tb;
-    for (auto i = 0; i < bufferIn.size(); i+=14) {
+
+    for (auto i = 0; i < bufferIn.size(); i+=15) {
       Gaussian2D g = unpackGaussian2D(bufferIn, i);
       splat(g, tlBound, brBound);
     }
