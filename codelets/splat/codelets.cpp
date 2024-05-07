@@ -70,8 +70,9 @@ public:
     return {floor(pt.x - tlBound.x), floor(pt.y - tlBound.y)};
   }
 
-  void splat(const Primitive &p, const ivec2& tlBound) {
+  void splat(const Primitive &p, const ivec2& tlBound, const ivec2& brBound) {
     auto bb = p.getBoundingBox();
+    bb = bb.clip(tlBound, brBound);
     auto tl = viewspaceToTile(bb.min, tlBound);
     auto br = viewspaceToTile(bb.max, tlBound);
     for (auto i = tl.x; i < br.x; i++) {
@@ -134,20 +135,20 @@ public:
 
     ivec4 mean;
     memcpy(&mean, &buffer[idx], sizeof(mean));
-    printf("mean: %f %f %f %f\n", mean.x, mean.y, mean.z, mean.w);
-    ivec4 colour;
-    memcpy(&colour, &buffer[idx+sizeof(mean)], sizeof(colour));
-    printf("colour: %f %f %f %f\n", colour.x, colour.y, colour.z, colour.w);
-    unsigned gid;
-    memcpy(&gid, &buffer[idx+sizeof(mean)+sizeof(colour)], sizeof(gid));
-    ivec2 scale;
-    memcpy(&scale, &buffer[idx+sizeof(mean)+sizeof(colour)+sizeof(gid)], sizeof(scale));
-    printf("scale: %f %f\n", scale.x, scale.y);
-    ivec4 rot;
-    memcpy(&rot, &buffer[idx+sizeof(mean)+sizeof(colour)+sizeof(gid)+sizeof(scale)], sizeof(rot));
 
+    ivec4 colour;
+    memcpy(&colour, &buffer[idx+4], sizeof(colour));
+    unsigned gid;
+    memcpy(&gid, &buffer[idx+8], sizeof(gid));
+    ivec2 scale;
+    memcpy(&scale, &buffer[idx+9], sizeof(scale));
+    // printf("scale %f %f\n", scale.x, scale.y);
+    // ivec4 rot;
+    // memcpy(&rot, &buffer[idx+sizeof(mean)+sizeof(colour)+sizeof(gid)+sizeof(scale)], sizeof(rot));
+
+    g.mean = mean;
     g.scale = scale;
-    g.rot = rot;
+    // g.rot = rot;
     g.colour = colour;
 
     return g;
@@ -223,47 +224,44 @@ public:
   }
 
   void readBuffer(poplar::Input<poplar::Vector<float>> &bufferIn, dir direction, const glm::mat4& m, const std::pair<ivec2, ivec2> tb, const splat::Viewport& vp) {
-    auto [tlBound, brBound] = tb;
+    // auto [tlBound, brBound] = tb;
 
-    for (auto i = 0; i < bufferIn.size(); i+=sizeof(square)) {
-      struct square sq = unpackGaussian(bufferIn, i);
-      if (sq.gid == 0u) {
-        break;
-      }
+    // for (auto i = 0; i < bufferIn.size(); i+=sizeof(square)) {
+    //   struct square sq = unpackGaussian(bufferIn, i);
+    //   if (sq.gid == 0u) {
+    //     break;
+    //   }
 
-      const ivec4 green = {0.0f, 0.2f, 0.0f, 0.0f};
-      colourFb(green);
+    //   const ivec4 green = {0.0f, 0.2f, 0.0f, 0.0f};
+    //   colourFb(green);
 
-      auto upt = glm::vec4(sq.mean.x, sq.mean.y, sq.mean.z, sq.mean.w);
-      glm::vec2 mean2D = vp.clipSpaceToViewport(m * upt);
-      // give point a square extent
-      ivec2 topleft = {mean2D.x - (EXTENT / 2.0f), mean2D.y - (EXTENT / 2.0f)};
-      ivec2 bottomright = {mean2D.x + (EXTENT / 2.0f), mean2D.y + (EXTENT / 2.0f)};
+    //   auto upt = glm::vec4(sq.mean.x, sq.mean.y, sq.mean.z, sq.mean.w);
+    //   glm::vec2 mean2D = vp.clipSpaceToViewport(m * upt);
+    //   // give point a square extent
+    //   ivec2 topleft = {mean2D.x - (EXTENT / 2.0f), mean2D.y - (EXTENT / 2.0f)};
+    //   ivec2 bottomright = {mean2D.x + (EXTENT / 2.0f), mean2D.y + (EXTENT / 2.0f)};
 
-      // clip the square to the tile, return true 
-      // if it needs to be copied to a different direction
-      auto dirs = square::clip(tlBound, brBound, topleft, bottomright);
+    //   // clip the square to the tile, return true 
+    //   // if it needs to be copied to a different direction
+    //   auto dirs = square::clip(tlBound, brBound, topleft, bottomright);
 
-      // set the topleft and bottomright to be relative to the tile
-      ivec2 tlTileCoords = viewspaceToTile(topleft, tlBound);
-      ivec2 brTileCoords = viewspaceToTile(bottomright, tlBound);
+    //   // set the topleft and bottomright to be relative to the tile
+    //   ivec2 tlTileCoords = viewspaceToTile(topleft, tlBound);
+    //   ivec2 brTileCoords = viewspaceToTile(bottomright, tlBound);
 
-      splat(sq, tlBound);
-      if (dirs.keep) { 
-        insert(squares, sq);
-      }  
-      sendOnce(sq, dirs, direction);
-    }
+    //   // splat(sq, tlBound);
+    //   if (dirs.keep) { 
+    //     insert(squares, sq);
+    //   }  
+    //   sendOnce(sq, dirs, direction);
+    // }
   }
 
   void renderStored(poplar::Input<poplar::Vector<float>> &bufferIn, const glm::mat4& m, const std::pair<ivec2, ivec2> tb, const splat::Viewport& vp) {
     auto [tlBound, brBound] = tb;
-
-    
-    
-    for (auto i = 0; i < bufferIn.size(); i+=15) {
+    for (auto i = 0; i < bufferIn.size(); i+=14) {
       Gaussian2D g = unpackGaussian2D(bufferIn, i);
-      splat(g, tlBound);
+      splat(g, tlBound, brBound);
     }
   }
 

@@ -188,9 +188,10 @@ int main(int argc, char** argv) {
 
     splat::Gaussian2D g;
     g.mean = {state.X, state.Y};
+    g.colour = {1.0f, 0.f, 0.f, 0.9f};
+    g.gid = 9;
     g.scale = {state.lambda1, state.lambda2};
     // g.rot = 
-    g.colour = {1.0f, 0.f, 0.f, 0.9f};
 
     if (state.device == "cpu") {
       // pvti::Tracepoint scoped(&traceChannel, "mvp_transform_cpu");
