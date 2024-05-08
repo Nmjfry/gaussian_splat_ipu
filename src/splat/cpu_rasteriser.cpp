@@ -26,6 +26,7 @@ std::uint32_t splatPoints(cv::Mat& image,
   std::uint32_t count = 0u;
   const auto colour = cv::Vec3b(0, 255, 0);
   std::unordered_map<std::uint32_t, std::vector<glm::vec4>> copiedPoints;
+  const auto EXTENT = 5;
 
   auto numPtsOnTile = clipCoords.size() / fb.numTiles;
   #pragma omp parallel for schedule(static, 128) num_threads(32)

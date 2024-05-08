@@ -18,6 +18,8 @@ using namespace splat;
 #include <ipu_builtins.h>
 #endif
 
+DEF_FUNC_CALL_PTRS("_ZN12Transform4x45splatERKN5splat9PrimitiveERKNS0_5ivec2ES6_", "_ZNK5splat10Gaussian2D14getBoundingBoxEv, _ZNK5splat10Gaussian2D6insideEff");
+
 // Multi-Vertex to transform every 4x1 vector
 // in an array by the same 4x4 transformation matrix.
 // Uses the OpenGL Math (GLM) library for demonstration
@@ -70,54 +72,32 @@ public:
     return {floor(pt.x - tlBound.x), floor(pt.y - tlBound.y)};
   }
 
-  // bool inside(const Primitive &p, float x, float y) const {
-  //   if (auto g = static_cast<const Gaussian2D*>(&p); g) {
-  //     return g->inside(x, y);
-  //   }
-  //   auto c = ipu::cos(rot.w);
-  //   auto s = ipu::sin(rot.w);
-  //   auto dd = (scale.x / 2) * (scale.x / 2);
-  //   auto DD = (scale.y / 2) * (scale.y / 2);
-  //   auto a = c * (x - mean.x) + s * (y - mean.y);
-  //   auto b = s * (x - mean.x) - c * (y - mean.y);
-  //   return (((a * a) / dd)  + ((b * b) / DD)) <= 1;
-  // }
+  // NOTE: virtual functions are poorly supported in IPU codelets
+  // you must define the name of the virtual function in the DEF_FUNC_CALL_PTRS
+  // macro above. Otherwise will stack overflow as stack size cannot be determined
+  // at compile time. 
 
+  // popc -O3 -S --target=ipu2 codelets.cpp -o simd.S
+  // -I /external/glm/
+  // -I /include/missing
+  // -I /include/tileMapping
+  // to get assembly for function name
 
   void splat(const Primitive &p, const ivec2& tlBound, const ivec2& brBound) {
     auto bb = p.getBoundingBox();
+    bb = bb.clip(tlBound, brBound);
 
 
-    if (auto g = static_cast<const Gaussian2D*>(&p); g) {
-      auto c = ipu::cos(g->rot.w);
-      auto s = ipu::sin(g->rot.w);
-      auto rotationMat = glm::mat2x2(c, -s, s, c);
-      bb = bb.rotate(rotationMat, glm::vec2(g->mean.x, g->mean.y));
-      bb = bb.clip(tlBound, brBound);
-
-
-
-      for (auto i = bb.min.x; i < bb.max.x; i++) {
-        for (auto j = bb.min.y; j < bb.max.y; j++) {
-
-          auto dd = (g->scale.x / 2) * (g->scale.x / 2);
-          auto DD = (g->scale.y / 2) * (g->scale.y / 2);
-          auto a = c * (i - g->mean.x) + s * (j - g->mean.y);
-          auto b = s * (i - g->mean.x) - c * (j - g->mean.y);
-          bool insideEllipse = (((a * a) / dd)  + ((b * b) / DD)) <= 1;
-
-          if(insideEllipse) {
-            auto px = viewspaceToTile({i, j}, tlBound);
-            setPixel(px.x, px.y, p.colour);
-          } else {
-            auto px = viewspaceToTile({i, j}, tlBound);
-            setPixel(px.x, px.y, {0.0f, 0.3f, 0.0f, 0.0f});
-          }
-
+    for (auto i = bb.min.x; i < bb.max.x; i++) {
+      for (auto j = bb.min.y; j < bb.max.y; j++) {
+        auto px = viewspaceToTile({i, j}, tlBound);
+        if(p.inside(i,j)) {
+          setPixel(px.x, px.y, p.colour);
+        } else {
+          setPixel(px.x, px.y, {0.0f, 0.3f, 0.0f, 0.0f});
         }
       }
     }
-
   }
 
   bool insertAt(poplar::Vector<float> &buffer, unsigned idx, struct square& sq) {

@@ -36,6 +36,9 @@ struct ivec2 {
   struct ivec2 operator*(float const &scalar) const {
     return {x * scalar, y * scalar};
   }
+  struct ivec2 operator/(float const &scalar) const {
+    return {x / scalar, y / scalar};
+  }
 };
 
 typedef struct ivec2 ivec2;
@@ -142,12 +145,11 @@ struct Primitive {
   virtual bool inside(float x, float y) const = 0;
 };
 
-#define EXTENT 10.0f
-
 struct square : Primitive {
+  float radius = 10.f;
 
   Bounds2f getBoundingBox() const override {
-    return Bounds2f({mean.x - EXTENT, mean.y - EXTENT}, {mean.x + EXTENT, mean.y + EXTENT});
+    return Bounds2f({mean.x - radius, mean.y - radius}, {mean.x + radius, mean.y + radius});
   }
 
   bool inside(float x, float y) const override {
@@ -207,7 +209,7 @@ struct Gaussian : Primitive {
     }
 
     Bounds2f getBoundingBox() const override {
-      return Bounds2f({mean.x - EXTENT, mean.y - EXTENT}, {mean.x + EXTENT, mean.y + EXTENT});
+      return Bounds2f({mean.x - 10.0f, mean.y - 10.0f}, {mean.x + 10.0f, mean.y + 10.0f});
     }
 
     bool inside(float x, float y) const override {
@@ -215,7 +217,8 @@ struct Gaussian : Primitive {
     }
 };
 
-struct Gaussian2D : Primitive {
+class Gaussian2D : public Primitive {
+  public:
     ivec2 scale;
     ivec4 rot;  // local rotation of gaussian (real, i, j, k)
 
@@ -231,14 +234,20 @@ struct Gaussian2D : Primitive {
         return R * S * glm::transpose(S) * glm::transpose(R);
     }
 
-    Bounds2f getBoundingBox() const override {
-      ivec2 mean2D = {mean.x, mean.y};
-      ivec2 min = mean2D - scale;
-      ivec2 max = mean2D + scale;
-      return Bounds2f(min, max);
+    // need to define IPU versions of these functions
+    // since cos and sin are compiled differently?
+    Bounds2f getBoundingBox() const {
+      auto c = glm::cos(rot.w);
+      auto s = glm::sin(rot.w);
+      glm::vec2 eigenvectors = {scale.x, scale.y};
+      auto lambdas = (eigenvectors / 2.0f) * (eigenvectors / 2.0f);
+      auto dxMax = glm::sqrt(lambdas.x * (c * c) + lambdas.y * (s * s));
+      auto dyMax = glm::sqrt(lambdas.x * (s * s) + lambdas.y * (c * c));
+      return Bounds2f({mean.x - dxMax, mean.y - dyMax}, {mean.x + dxMax, mean.y + dyMax});
     }
 
-    bool inside(float x, float y) const override {
+    bool inside(float x, float y) const {
+      // TODO: remove trig fns from per pixel test
       auto c = glm::cos(rot.w);
       auto s = glm::sin(rot.w);
       auto dd = (scale.x / 2) * (scale.x / 2);
@@ -247,6 +256,16 @@ struct Gaussian2D : Primitive {
       auto b = s * (x - mean.x) - c * (y - mean.y);
       return (((a * a) / dd)  + ((b * b) / DD)) <= 1;
     }
+
+    private:
+      std::pair<glm::vec2, glm::vec2> getUV(glm::vec2 lambdas, glm::mat2x2 r) const {
+        glm::vec2 pu = {glm::cos(glm::pi<float>() / 2), glm::sin(glm::pi<float>() / 2)};
+        glm::vec2 pv = {glm::cos(0), glm::sin(0)};
+        auto u = r * pu;
+        auto v = r * pv;
+        return {u, v};
+      }
+
 };
 
 #define GAUSSIAN_SIZE sizeof(Gaussian2D)
