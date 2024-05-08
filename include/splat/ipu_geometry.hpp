@@ -110,29 +110,6 @@ struct Bounds2f {
     return clipped;
   }
 
-  Bounds2f rotate(glm::mat2x2 r, glm::vec2 centre) {
-    glm::vec2 tl = {min.x, min.y};
-    glm::vec2 br = {max.x, max.y};
-
-    // translate to origin
-    tl = tl - centre;
-    br = br - centre;
-    
-    tl =  tl * r;
-
-    // TODO: rotate in the opposite direction
-    br = br * r;
-
-
-    // translate back
-    tl = tl + centre;
-    br = br + centre;
-
-    ivec2 tl2 = {tl.x, tl.y};
-    ivec2 br2 = {br.x, br.y};
-    return {tl2, br2};
-  }
-
   ivec2 min;
   ivec2 max;
 };
@@ -143,6 +120,7 @@ struct Primitive {
   unsigned gid;
   virtual Bounds2f getBoundingBox() const = 0;  
   virtual bool inside(float x, float y) const = 0;
+  virtual void cacheTrigIds() {};
 };
 
 struct square : Primitive {
@@ -236,20 +214,20 @@ class Gaussian2D : public Primitive {
 
     // need to define IPU versions of these functions
     // since cos and sin are compiled differently?
-    Bounds2f getBoundingBox() const {
-      auto c = glm::cos(rot.w);
-      auto s = glm::sin(rot.w);
-      glm::vec2 eigenvectors = {scale.x, scale.y};
-      auto lambdas = (eigenvectors / 2.0f) * (eigenvectors / 2.0f);
+    Bounds2f getBoundingBox() const override {
+      auto c = cos;
+      auto s = sin;
+      glm::vec2 eigenvalues = {scale.x, scale.y};
+      auto lambdas = (eigenvalues / 2.0f) * (eigenvalues / 2.0f);
       auto dxMax = glm::sqrt(lambdas.x * (c * c) + lambdas.y * (s * s));
       auto dyMax = glm::sqrt(lambdas.x * (s * s) + lambdas.y * (c * c));
       return Bounds2f({mean.x - dxMax, mean.y - dyMax}, {mean.x + dxMax, mean.y + dyMax});
     }
 
-    bool inside(float x, float y) const {
+    bool inside(float x, float y) const override {
       // TODO: remove trig fns from per pixel test
-      auto c = glm::cos(rot.w);
-      auto s = glm::sin(rot.w);
+      auto c = cos;
+      auto s = sin;
       auto dd = (scale.x / 2) * (scale.x / 2);
       auto DD = (scale.y / 2) * (scale.y / 2);
       auto a = c * (x - mean.x) + s * (y - mean.y);
@@ -257,15 +235,14 @@ class Gaussian2D : public Primitive {
       return (((a * a) / dd)  + ((b * b) / DD)) <= 1;
     }
 
-    private:
-      std::pair<glm::vec2, glm::vec2> getUV(glm::vec2 lambdas, glm::mat2x2 r) const {
-        glm::vec2 pu = {glm::cos(glm::pi<float>() / 2), glm::sin(glm::pi<float>() / 2)};
-        glm::vec2 pv = {glm::cos(0), glm::sin(0)};
-        auto u = r * pu;
-        auto v = r * pv;
-        return {u, v};
-      }
+    void cacheTrigIds() override {
+      cos = glm::cos(rot.w);
+      sin = glm::sin(rot.w);
+    }
 
+    private:
+      float cos;
+      float sin;
 };
 
 #define GAUSSIAN_SIZE sizeof(Gaussian2D)

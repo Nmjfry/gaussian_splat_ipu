@@ -18,7 +18,7 @@ using namespace splat;
 #include <ipu_builtins.h>
 #endif
 
-DEF_FUNC_CALL_PTRS("_ZN12Transform4x45splatERKN5splat9PrimitiveERKNS0_5ivec2ES6_", "_ZNK5splat10Gaussian2D14getBoundingBoxEv, _ZNK5splat10Gaussian2D6insideEff");
+DEF_FUNC_CALL_PTRS("_ZN12Transform4x45splatERN5splat9PrimitiveERKNS0_5ivec2ES5_", "_ZNK5splat10Gaussian2D14getBoundingBoxEv, _ZNK5splat10Gaussian2D6insideEff, _ZN5splat10Gaussian2D12cacheTrigIdsEv");
 
 // Multi-Vertex to transform every 4x1 vector
 // in an array by the same 4x4 transformation matrix.
@@ -83,9 +83,19 @@ public:
   // -I /include/tileMapping
   // to get assembly for function name
 
-  void splat(const Primitive &p, const ivec2& tlBound, const ivec2& brBound) {
+  void splat(Primitive &p, const ivec2& tlBound, const ivec2& brBound) {
     auto bb = p.getBoundingBox();
     bb = bb.clip(tlBound, brBound);
+    p.cacheTrigIds();
+
+    ivec4 c;
+    if (tile_id[0] % 3 == 0) {
+      c = {.3f, 0.0f, 0.0f, 0.0f};
+    } else if (tile_id[0] % 3 == 1) {
+      c = {0.0f, .3f, 0.0f, 0.0f};
+    } else {
+      c = {0.0f, 0.0f, .3f, 0.0f};
+    }
 
 
     for (auto i = bb.min.x; i < bb.max.x; i++) {
@@ -94,7 +104,7 @@ public:
         if(p.inside(i,j)) {
           setPixel(px.x, px.y, p.colour);
         } else {
-          setPixel(px.x, px.y, {0.0f, 0.3f, 0.0f, 0.0f});
+          setPixel(px.x, px.y, c);
         }
       }
     }
@@ -301,22 +311,20 @@ public:
     colourFb(black);
 
     //clear all of the out buffers:
-    for (auto i = 0; i < rightOut.size(); i++) {
-      memset(&rightOut[i], 0, sizeof(float));
-      memset(&leftOut[i], 0, sizeof(float));
-      memset(&upOut[i], 0, sizeof(float));
-      memset(&downOut[i], 0, sizeof(float));
-    }
+    memset(&rightOut, 0, sizeof(rightOut));
+    memset(&leftOut, 0, sizeof(leftOut));
+    memset(&upOut, 0, sizeof(upOut));
+    memset(&downOut, 0, sizeof(downOut));
 
     renderStored(vertsIn, m, tb, vp);
    
     
     // read the gaussians from the send buffers,
     // project and clip, send to other tiles if need 
-    readBuffer(rightIn, dir::right, m, tb, vp);
-    readBuffer(leftIn, dir::left, m, tb, vp);
-    readBuffer(upIn, dir::up, m, tb, vp);
-    readBuffer(downIn, dir::down, m, tb, vp);
+    // readBuffer(rightIn, dir::right, m, tb, vp);
+    // readBuffer(leftIn, dir::left, m, tb, vp);
+    // readBuffer(upIn, dir::up, m, tb, vp);
+    // readBuffer(downIn, dir::down, m, tb, vp);
 
     return true;
   }
