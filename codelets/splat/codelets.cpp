@@ -70,34 +70,54 @@ public:
     return {floor(pt.x - tlBound.x), floor(pt.y - tlBound.y)};
   }
 
-  
+  // bool inside(const Primitive &p, float x, float y) const {
+  //   if (auto g = static_cast<const Gaussian2D*>(&p); g) {
+  //     return g->inside(x, y);
+  //   }
+  //   auto c = ipu::cos(rot.w);
+  //   auto s = ipu::sin(rot.w);
+  //   auto dd = (scale.x / 2) * (scale.x / 2);
+  //   auto DD = (scale.y / 2) * (scale.y / 2);
+  //   auto a = c * (x - mean.x) + s * (y - mean.y);
+  //   auto b = s * (x - mean.x) - c * (y - mean.y);
+  //   return (((a * a) / dd)  + ((b * b) / DD)) <= 1;
+  // }
+
 
   void splat(const Primitive &p, const ivec2& tlBound, const ivec2& brBound) {
     auto bb = p.getBoundingBox();
-    bb = bb.clip(tlBound, brBound);
-    auto tl = viewspaceToTile(bb.min, tlBound);
-    auto br = viewspaceToTile(bb.max, tlBound);
-    ivec2 mean2D = {p.mean.x, p.mean.y};
-    auto meanVs = viewspaceToTile(mean2D, tlBound);
 
-    if (auto g = static_cast<const Gaussian2D*>(&p)) {
-      auto c = glm::cos(g->rot.w);
-      auto s = glm::sin(g->rot.w);
-      auto dd = (g->scale.x / 2) * (g->scale.x / 2);
-      auto DD = (g->scale.y / 2) * (g->scale.y / 2);
 
-      for (auto i = tl.x; i < br.x; i++) {
-        for (auto j = tl.y; j < br.y; j++) {
-            auto a = c * (i - meanVs.x) + s * (j - meanVs.y);
-            auto b = s * (i - meanVs.x) - c * (j - meanVs.y);
-            bool inEllipse = (((a * a) / dd) + ((b * b) / DD)) <= 1;
+    if (auto g = static_cast<const Gaussian2D*>(&p); g) {
+      auto c = ipu::cos(g->rot.w);
+      auto s = ipu::sin(g->rot.w);
+      auto rotationMat = glm::mat2x2(c, -s, s, c);
+      bb = bb.rotate(rotationMat, glm::vec2(g->mean.x, g->mean.y));
+      bb = bb.clip(tlBound, brBound);
 
-            if (inEllipse) {
-              setPixel(i, j, p.colour); 
-            } 
+
+
+      for (auto i = bb.min.x; i < bb.max.x; i++) {
+        for (auto j = bb.min.y; j < bb.max.y; j++) {
+
+          auto dd = (g->scale.x / 2) * (g->scale.x / 2);
+          auto DD = (g->scale.y / 2) * (g->scale.y / 2);
+          auto a = c * (i - g->mean.x) + s * (j - g->mean.y);
+          auto b = s * (i - g->mean.x) - c * (j - g->mean.y);
+          bool insideEllipse = (((a * a) / dd)  + ((b * b) / DD)) <= 1;
+
+          if(insideEllipse) {
+            auto px = viewspaceToTile({i, j}, tlBound);
+            setPixel(px.x, px.y, p.colour);
+          } else {
+            auto px = viewspaceToTile({i, j}, tlBound);
+            setPixel(px.x, px.y, {0.0f, 0.3f, 0.0f, 0.0f});
+          }
+
         }
       }
     }
+
   }
 
   bool insertAt(poplar::Vector<float> &buffer, unsigned idx, struct square& sq) {

@@ -107,6 +107,29 @@ struct Bounds2f {
     return clipped;
   }
 
+  Bounds2f rotate(glm::mat2x2 r, glm::vec2 centre) {
+    glm::vec2 tl = {min.x, min.y};
+    glm::vec2 br = {max.x, max.y};
+
+    // translate to origin
+    tl = tl - centre;
+    br = br - centre;
+    
+    tl =  tl * r;
+
+    // TODO: rotate in the opposite direction
+    br = br * r;
+
+
+    // translate back
+    tl = tl + centre;
+    br = br + centre;
+
+    ivec2 tl2 = {tl.x, tl.y};
+    ivec2 br2 = {br.x, br.y};
+    return {tl2, br2};
+  }
+
   ivec2 min;
   ivec2 max;
 };
