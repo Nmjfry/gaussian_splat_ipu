@@ -191,6 +191,7 @@ int main(int argc, char** argv) {
     g.colour = {1.0f, 0.f, 0.f, 0.9f};
     g.gid = 9;
     g.scale = {state.lambda1, state.lambda2};
+    g.scale = g.scale * 10.0f;
     g.rot.w = state.envRotationDegrees;
 
     if (state.device == "cpu") {

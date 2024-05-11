@@ -327,11 +327,6 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
       auto sliceFb = paddedFramebuffer.slice(mFb.front());
 
-      poplar::Tensor squares = graph.addVariable(FLOAT, {channelSize * 5}, "squares");
-
-      vg.setTileMapping(squares, t);
-      //set size of squares variable
-
 
 
       auto v = vg.addVertex(splatCs, "Transform4x4");
@@ -340,7 +335,6 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       vg.connect(v["vertsIn"], ptsIn);
       vg.connect(v["localFb"], sliceFb);
       vg.connect(v["tile_id"], tid);
-      vg.connect(v["squares"], squares);
       vertices.push_back(v);
     }
   }

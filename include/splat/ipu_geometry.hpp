@@ -91,20 +91,20 @@ struct Bounds2f {
   //   max.y = max(max.y, v.y);
   // }
 
-  Bounds2f clip(const ivec2& tlBound, const ivec2& brBound) const {
+  Bounds2f clip(const Bounds2f& fixedBound) const {
     ivec2 topleft = min;
     ivec2 bottomright = max;
-    if (topleft.x < tlBound.x) {
-      topleft.x = tlBound.x;
+    if (topleft.x < fixedBound.min.x) {
+      topleft.x = fixedBound.min.x;
     }
-    if (topleft.y < tlBound.y) {
-      topleft.y = tlBound.y;
+    if (topleft.y < fixedBound.min.y) {
+      topleft.y = fixedBound.min.y;
     }
-    if (bottomright.x >= brBound.x) {
-      bottomright.x = brBound.x;
+    if (bottomright.x >= fixedBound.max.x) {
+      bottomright.x = fixedBound.max.x;
     }
-    if (bottomright.y >= brBound.y) {
-      bottomright.y = brBound.y;
+    if (bottomright.y >= fixedBound.max.y) {
+      bottomright.y = fixedBound.max.y;
     }
     Bounds2f clipped = {topleft, bottomright};
     return clipped;

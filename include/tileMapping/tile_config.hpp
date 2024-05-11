@@ -54,7 +54,7 @@ public:
   }
 
   // Compute the tile's positition for a given tile index:
-  std::pair<ivec2, ivec2> getTileBounds(unsigned tid) const {
+  Bounds2f getTileBounds(unsigned tid) const {
     auto div = floor(tid / numTilesAcross);
     auto mod = tid - div * numTilesAcross;
     ivec2 tl;
@@ -63,7 +63,7 @@ public:
     tl.y = floor(div * tileHeight);
     br.x = tl.x + tileWidth;
     br.y = tl.y + tileHeight;
-    return std::make_pair(tl, br);
+    return Bounds2f(tl, br);
   }
 
   directions checkImageBoundaries(unsigned tid) {

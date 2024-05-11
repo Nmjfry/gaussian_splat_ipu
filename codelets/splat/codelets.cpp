@@ -18,7 +18,7 @@ using namespace splat;
 #include <ipu_builtins.h>
 #endif
 
-DEF_FUNC_CALL_PTRS("_ZN12Transform4x45splatERN5splat9PrimitiveERKNS0_5ivec2ES5_", "_ZNK5splat10Gaussian2D14getBoundingBoxEv, _ZNK5splat10Gaussian2D6insideEff, _ZN5splat10Gaussian2D12cacheTrigIdsEv");
+DEF_FUNC_CALL_PTRS("_ZN12Transform4x45splatERN5splat9PrimitiveERKNS0_8Bounds2fE", "_ZNK5splat10Gaussian2D14getBoundingBoxEv,_ZNK5splat10Gaussian2D6insideEff,_ZN5splat10Gaussian2D12cacheTrigIdsEv");
 
 // Multi-Vertex to transform every 4x1 vector
 // in an array by the same 4x4 transformation matrix.
@@ -38,23 +38,15 @@ public:
 
   poplar::Input<poplar::Vector<float>> rightIn;
   poplar::Output<poplar::Vector<float>> rightOut;
-  unsigned squaresSentRight = 0;
 
   poplar::Input<poplar::Vector<float>> leftIn; 
   poplar::Output<poplar::Vector<float>> leftOut;
-  unsigned squaresSentLeft = 0;
 
   poplar::Input<poplar::Vector<float>> upIn;
   poplar::Output<poplar::Vector<float>> upOut;
-  unsigned squaresSentUp = 0;
 
   poplar::Input<poplar::Vector<float>> downIn;
   poplar::Output<poplar::Vector<float>> downOut;
-  unsigned squaresSentDown = 0;
-
-  poplar::InOut<poplar::Vector<float>> squares;
-
-  unsigned gaussiansInitialised = 0;
 
   unsigned toByteBufferIndex(float x, float y) {
     return unsigned(x + y * IPU_TILEWIDTH) * 4;
@@ -63,6 +55,11 @@ public:
   void setPixel(float x, float y, const ivec4 &colour) {
     ivec4 pixel;
     unsigned idx = toByteBufferIndex(x, y);
+    if (idx >= localFb.size()) {
+      printf("ERROR: setting pixel outside of framebuffer bounds\n");
+      printf(" --> please check coordinate mapping is in tile space\n");
+      return;
+    }
     memcpy(&pixel, &localFb[idx], sizeof(pixel));
     pixel = pixel + colour;
     memcpy(&localFb[idx], &pixel, sizeof(pixel));
@@ -83,9 +80,10 @@ public:
   // -I /include/tileMapping
   // to get assembly for function name
 
-  void splat(Primitive &p, const ivec2& tlBound, const ivec2& brBound) {
-    auto bb = p.getBoundingBox();
-    bb = bb.clip(tlBound, brBound);
+  void splat(Primitive &p, const Bounds2f& tb) {
+
+    // clip the bounding box of the primitive to the tile bounds
+    auto bb = p.getBoundingBox().clip(tb);
     p.cacheTrigIds();
 
     ivec4 c;
@@ -97,10 +95,9 @@ public:
       c = {0.0f, 0.0f, .3f, 0.0f};
     }
 
-
     for (auto i = bb.min.x; i < bb.max.x; i++) {
       for (auto j = bb.min.y; j < bb.max.y; j++) {
-        auto px = viewspaceToTile({i, j}, tlBound);
+        auto px = viewspaceToTile({i, j}, tb.min);
         if(p.inside(i,j)) {
           setPixel(px.x, px.y, p.colour);
         } else {
@@ -123,7 +120,8 @@ public:
   bool insert(poplar::Vector<float> &buffer, struct square& sq) {
     unsigned idx = buffer.size();
     for (auto i = 0; i < buffer.size(); i+=sizeof(square)) {
-      auto gid = unpackGaussian(buffer, i).gid;
+      unsigned gid;
+      memcpy(&gid, &buffer[idx+8], sizeof(gid)); // TODO: specify gid
       if (gid == sq.gid) {
         return false;
       }
@@ -134,23 +132,6 @@ public:
     return insertAt(buffer, idx, sq);
   }
 
-  square unpackGaussian(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx) {
-    struct square sq;
-
-    ivec4 mean;
-    memcpy(&mean, &buffer[idx], sizeof(mean));
-    ivec4 colour;
-    memcpy(&colour, &buffer[idx+sizeof(mean)], sizeof(colour));
-    unsigned gid;
-    memcpy(&gid, &buffer[idx+sizeof(mean)+sizeof(colour)], sizeof(gid));
-
-    sq.mean = mean;
-    sq.colour = colour;
-    sq.gid = gid;
-    
-    return sq;
-  }
-
   Gaussian2D unpackGaussian2D(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx) {
     // ivec4 mean;  // in world space
     // ivec4 colour; // RGBA color space
@@ -158,10 +139,17 @@ public:
     // ivec2 scale;
     // ivec4 rot;  // local rotation of gaussian (real, i, j, k)
     struct Gaussian2D g;
+    // memcpy(&g, &buffer[idx], sizeof(g));
+
+    // printf("mean %f %f %f %f\n", g.mean.x, g.mean.y, g.mean.z, g.mean.w);
+    // printf("colour %f %f %f %f\n", g.colour.x, g.colour.y, g.colour.z, g.colour.w);
+    // printf("gid %d\n", g.gid);
+    // printf("scale %f %f\n", g.scale.x, g.scale.y);
+    // printf("rot %f %f %f %f\n", g.rot.x, g.rot.y, g.rot.z, g.rot.w);
+
 
     ivec4 mean;
     memcpy(&mean, &buffer[idx], sizeof(mean));
-
     ivec4 colour;
     memcpy(&colour, &buffer[idx+4], sizeof(colour));
     unsigned gid;
@@ -170,7 +158,7 @@ public:
     memcpy(&scale, &buffer[idx+9], sizeof(scale));
     ivec4 rot;
     memcpy(&rot, &buffer[idx+11], sizeof(rot));
-  // printf("scale %f %f\n", scale.x, scale.y);
+  // // printf("scale %f %f\n", scale.x, scale.y);
 
     g.mean = mean;
     g.scale = scale;
@@ -178,23 +166,6 @@ public:
     g.colour = colour;
 
     return g;
-  }
-
-  square unpackGaussian(poplar::Vector<float> &buffer, unsigned idx) {
-    struct square sq;
-
-    ivec4 mean;
-    memcpy(&mean, &buffer[idx], sizeof(mean));
-    ivec4 colour;
-    memcpy(&colour, &buffer[idx+sizeof(mean)], sizeof(colour));
-    unsigned gid;
-    memcpy(&gid, &buffer[idx+sizeof(mean)+sizeof(colour)], sizeof(gid));
-
-    sq.mean = mean;
-    sq.colour = colour;
-    sq.gid = gid;
-    
-    return sq;
   }
 
     // invalidate a gaussian in the buffer
@@ -224,9 +195,6 @@ public:
     if (dirs.down) {
       insert(downOut, sq);
     }
-    if (!dirs.down && !dirs.up && !dirs.left && !dirs.right) {
-      insert(squares, sq);
-    }
   }
 
   void sendOnce(struct square &sq, directions possibleDirs, dir recievedDirection) {
@@ -238,94 +206,48 @@ public:
       insert(upOut, sq);
     } else if (recievedDirection != dir::down && possibleDirs.down) {
       insert(downOut, sq);
-    } else {
-      insert(squares, sq);
-    }
+    } 
   }
 
-  void colourFb(const ivec4 &colour) {
-    for (auto i = 0; i < localFb.size(); i+=4) {
+  void colourFb(const ivec4 &colour, unsigned workerId) {
+    const auto startIndex = 4 * workerId;
+    for (auto i = startIndex; i < localFb.size(); i += 4 * numWorkers()) {
       memcpy(&localFb[i], &colour, sizeof(colour));
     }
   }
 
-  void readBuffer(poplar::Input<poplar::Vector<float>> &bufferIn, dir direction, const glm::mat4& m, const std::pair<ivec2, ivec2> tb, const splat::Viewport& vp) {
-    // auto [tlBound, brBound] = tb;
-
-    // for (auto i = 0; i < bufferIn.size(); i+=sizeof(square)) {
-    //   struct square sq = unpackGaussian(bufferIn, i);
-    //   if (sq.gid == 0u) {
-    //     break;
-    //   }
-
-    //   const ivec4 green = {0.0f, 0.2f, 0.0f, 0.0f};
-    //   colourFb(green);
-
-    //   auto upt = glm::vec4(sq.mean.x, sq.mean.y, sq.mean.z, sq.mean.w);
-    //   glm::vec2 mean2D = vp.clipSpaceToViewport(m * upt);
-    //   // give point a square extent
-    //   ivec2 topleft = {mean2D.x - (EXTENT / 2.0f), mean2D.y - (EXTENT / 2.0f)};
-    //   ivec2 bottomright = {mean2D.x + (EXTENT / 2.0f), mean2D.y + (EXTENT / 2.0f)};
-
-    //   // clip the square to the tile, return true 
-    //   // if it needs to be copied to a different direction
-    //   auto dirs = square::clip(tlBound, brBound, topleft, bottomright);
-
-    //   // set the topleft and bottomright to be relative to the tile
-    //   ivec2 tlTileCoords = viewspaceToTile(topleft, tlBound);
-    //   ivec2 brTileCoords = viewspaceToTile(bottomright, tlBound);
-
-    //   // splat(sq, tlBound);
-    //   if (dirs.keep) { 
-    //     insert(squares, sq);
-    //   }  
-    //   sendOnce(sq, dirs, direction);
-    // }
-  }
-
-  void renderStored(poplar::Input<poplar::Vector<float>> &bufferIn, const glm::mat4& m, const std::pair<ivec2, ivec2> tb, const splat::Viewport& vp) {
-    auto [tlBound, brBound] = tb;
-
+  void renderStored(poplar::Input<poplar::Vector<float>> &bufferIn, const glm::mat4& viewmatrix, const Bounds2f& tb, const splat::Viewport& vp) {
     for (auto i = 0; i < bufferIn.size(); i+=15) {
       Gaussian2D g = unpackGaussian2D(bufferIn, i);
-      splat(g, tlBound, brBound);
+      splat(g, tb);
     }
   }
 
   bool compute(unsigned workerId) {
-    if (workerId != 0) {
-      return true;
-    }
-    // construct mapping from tile to framebuffer
-    const TiledFramebuffer fbMapping(IPU_TILEWIDTH, IPU_TILEHEIGHT);
-    const splat::Viewport vp(0.0f, 0.0f, IMWIDTH, IMHEIGHT);
 
-    // Transpose because GLM storage order is column major:
-    const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
-    const auto tb = fbMapping.getTileBounds(tile_id[0]);
-    const auto initNumGaussians = vertsIn.size() / sizeof(square);
-
-    ivec4 tidColour = {1.0f, 0.0f, tile_id[0] * (1.0f / fbMapping.numTiles), 0.0f};
     // zero the framebuffer and clear the send buffers
-    const ivec4 black = {0.0f, 0.0f, 0.0f, 0.0f};
-    colourFb(black);
+    colourFb({0.0f, 0.0f, 0.0f, 0.0f}, workerId);
 
     //clear all of the out buffers:
     memset(&rightOut, 0, sizeof(rightOut));
     memset(&leftOut, 0, sizeof(leftOut));
     memset(&upOut, 0, sizeof(upOut));
     memset(&downOut, 0, sizeof(downOut));
-
-    renderStored(vertsIn, m, tb, vp);
-   
+  
+    if (workerId != 0) {
+      return true;
+    }
     
-    // read the gaussians from the send buffers,
-    // project and clip, send to other tiles if need 
-    // readBuffer(rightIn, dir::right, m, tb, vp);
-    // readBuffer(leftIn, dir::left, m, tb, vp);
-    // readBuffer(upIn, dir::up, m, tb, vp);
-    // readBuffer(downIn, dir::down, m, tb, vp);
+    // construct mapping from tile to framebuffer
+    const TiledFramebuffer fbMapping(IPU_TILEWIDTH, IPU_TILEHEIGHT);
+    const splat::Viewport vp(0.0f, 0.0f, IMWIDTH, IMHEIGHT);
 
+    // Transpose because GLM storage order is column major:
+    const auto viewmatrix = glm::transpose(glm::make_mat4(&matrix[0]));
+    const auto tb = fbMapping.getTileBounds(tile_id[0]);
+
+    renderStored(vertsIn, viewmatrix, tb, vp);
+   
     return true;
   }
  
