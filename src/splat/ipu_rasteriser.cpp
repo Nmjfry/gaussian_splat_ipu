@@ -304,7 +304,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   const auto tmFb = vg.getTileMapping(paddedFramebuffer);
 
   unsigned numPoints = 100;
-  std::size_t channelSize = numPoints * sizeof(struct square);
+  std::size_t channelSize = numPoints * GAUSSIAN_SIZE;
 
   std::vector<poplar::VertexRef> vertices;
 
@@ -398,7 +398,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
   program::Sequence main;
   main.add(broadcastMvp);
-  // main.add(broadcastPoints);
+  main.add(broadcastPoints);
   main.add(inputVertices.buildWrite(vg, true));
   main.add(program::Execute(splatCs));
   main.add(outputFramebuffer.buildRead(vg, true));

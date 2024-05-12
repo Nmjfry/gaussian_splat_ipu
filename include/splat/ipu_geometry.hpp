@@ -39,6 +39,9 @@ struct ivec2 {
   struct ivec2 operator/(float const &scalar) const {
     return {x / scalar, y / scalar};
   }
+  float length() const {
+    return sqrt(x * x + y * y);
+  }
 };
 
 typedef struct ivec2 ivec2;
@@ -71,9 +74,9 @@ struct Bounds2f {
   //   return (max + min) * .5f;
   // }
 
-  // ivec2 diagonal() const {
-  //   return max - min;
-  // }
+  ivec2 diagonal() const {
+    return max - min;
+  }
 
   // /// Extend the bounds to enclose another bounding box:
   // void operator += (const Bounds2f& other) {
@@ -108,6 +111,41 @@ struct Bounds2f {
     }
     Bounds2f clipped = {topleft, bottomright};
     return clipped;
+  }
+
+  Bounds2f clip(const Bounds2f& fixedBound, directions& dirs) const {
+    ivec2 topleft = min;
+    ivec2 bottomright = max;
+    if (topleft.x < fixedBound.min.x) {
+      topleft.x = fixedBound.min.x;
+      dirs.left = true;
+    }
+    if (topleft.y < fixedBound.min.y) {
+      topleft.y = fixedBound.min.y;
+      dirs.up = true;
+    }
+    if (bottomright.x >= fixedBound.max.x) {
+      bottomright.x = fixedBound.max.x;
+      dirs.right = true;
+    }
+    if (bottomright.y >= fixedBound.max.y) {
+      bottomright.y = fixedBound.max.y;
+      dirs.down = true;
+    }
+    Bounds2f clipped = {topleft, bottomright};
+    return clipped;
+  }
+
+  bool contains(const ivec2& v) const {
+    return v.x >= min.x && v.x < max.x && v.y >= min.y && v.y < max.y;
+  }
+
+  bool contains(const ivec4& v) const {
+    return contains(ivec2{v.x, v.y});
+  }
+
+  void print() const {
+    printf("tl : %f, %f  br: %f, %f", min.x, min.y, max.x, max.y);
   }
 
   ivec2 min;
@@ -238,6 +276,13 @@ class Gaussian2D : public Primitive {
     void cacheTrigIds() override {
       cos = glm::cos(rot.w);
       sin = glm::sin(rot.w);
+    }
+
+    void print() {
+      printf("mean: %f, %f, %f, %f ", mean.x, mean.y, mean.z, mean.w);
+      printf("scale: %f, %f ", scale.x, scale.y);
+      printf("rot: %f, %f, %f, %f ", rot.x, rot.y, rot.z, rot.w);
+      printf("cos: %f, sin: %f ", cos, sin);
     }
 
     private:
