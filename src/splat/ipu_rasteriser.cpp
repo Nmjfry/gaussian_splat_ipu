@@ -327,7 +327,8 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
       auto sliceFb = paddedFramebuffer.slice(mFb.front());
 
-
+      auto stored = vg.addVariable(poplar::FLOAT, {channelSize});
+      vg.setTileMapping(stored, t);
 
       auto v = vg.addVertex(splatCs, "Transform4x4");
       vg.setTileMapping(v, t);
@@ -335,6 +336,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       vg.connect(v["vertsIn"], ptsIn);
       vg.connect(v["localFb"], sliceFb);
       vg.connect(v["tile_id"], tid);
+      vg.connect(v["stored"], stored);
       vertices.push_back(v);
     }
   }
@@ -399,14 +401,14 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   program::Sequence main;
   main.add(broadcastMvp);
   main.add(broadcastPoints);
-  main.add(inputVertices.buildWrite(vg, true));
+  // main.add(inputVertices.buildWrite(vg, true));
   main.add(program::Execute(splatCs));
   main.add(outputFramebuffer.buildRead(vg, true));
 
-  // program::Sequence setup;
-  // main.add(inputVertices.buildWrite(vg, true));
+  program::Sequence setup;
+  main.add(inputVertices.buildWrite(vg, true));
 
-  // getPrograms().add("write_verts", setup);
+  getPrograms().add("write_verts", setup);
   getPrograms().add("project", main);
 }
 
@@ -416,7 +418,7 @@ void IpuSplatter::execute(poplar::Engine& engine, const poplar::Device& device) 
     modelViewProjection.connectWriteStream(engine, transformMatrix);
     inputVertices.connectWriteStream(engine, hostVertices);
     outputFramebuffer.connectReadStream(engine, frameBuffer);
-    // getPrograms().run(engine, "write_verts");
+    getPrograms().run(engine, "write_verts");
   }
   getPrograms().run(engine, "project");
 }
