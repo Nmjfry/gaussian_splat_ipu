@@ -18,7 +18,7 @@ using namespace splat;
 #include <ipu_builtins.h>
 #endif
 
-DEF_FUNC_CALL_PTRS("_ZN12Transform4x45splatERN5splat9PrimitiveERKNS0_8Bounds2fE", "_ZNK5splat10Gaussian2D14getBoundingBoxEv,_ZNK5splat10Gaussian2D6insideEff,_ZN5splat10Gaussian2D12cacheTrigIdsEv");
+DEF_FUNC_CALL_PTRS("_ZN12Transform4x45splatERN5splat9PrimitiveERKNS0_8Bounds2fE", "_ZNK5splat10Gaussian2D14getBoundingBoxEv,_ZNK5splat10Gaussian2D6insideEff");
 
 // Multi-Vertex to transform every 4x1 vector
 // in an array by the same 4x4 transformation matrix.
@@ -51,7 +51,7 @@ public:
 
   poplar::Input<poplar::Vector<float>> stored;
 
-  bool sent;
+  bool init;
 
   unsigned toByteBufferIndex(float x, float y) {
     return unsigned(x + y * IPU_TILEWIDTH) * 4;
@@ -146,7 +146,7 @@ public:
 
   // TODO: change to use templates instead of inheritance as virtual function insert 
   // vtable pointer so unpacking structs needs to be shifted by 1
-  Gaussian2D unpackGaussian2D(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx) {
+  Gaussian2D unpackGaussian2D(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx, const glm::mat4& viewmatrix, const splat::Viewport& vp) {
     // ivec4 mean;  // in world space
     // ivec4 colour; // RGBA color space
     // unsigned gid;
@@ -173,7 +173,10 @@ public:
     ivec4 rot;
     memcpy(&rot, &buffer[idx+11], sizeof(rot));
 
-    g.mean = mean;
+    glm::vec4 glmMean = {mean.x, mean.y, mean.z, mean.w};
+    auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
+
+    g.mean = {projMean.x, projMean.y, 0.f, 1.0f};
     g.scale = scale;
     g.rot = rot;
     g.colour = colour;
@@ -195,13 +198,6 @@ public:
     insertAt(buffer, idx, g);
   }
 
-  enum dir {
-    left,
-    right,
-    up,
-    down
-  };
-
   void send(Gaussian2D &g, directions dirs) {
     if (dirs.right) {
       insert(rightOut, g);
@@ -217,14 +213,14 @@ public:
     }
   }
 
-  void sendOnce(Gaussian2D &g, directions possibleDirs, dir recievedDirection) {
-    if (recievedDirection != dir::right && possibleDirs.right) {
+  void sendOnce(Gaussian2D &g, directions possibleDirs, direction recievedDirection) {
+    if (recievedDirection != direction::right && possibleDirs.right) {
       insert(rightOut, g);
-    } else if (recievedDirection != dir::left && possibleDirs.left) {
+    } else if (recievedDirection != direction::left && possibleDirs.left) {
       insert(leftOut, g);
-    } else if (recievedDirection != dir::up && possibleDirs.up) {
+    } else if (recievedDirection != direction::up && possibleDirs.up) {
       insert(upOut, g);
-    } else if (recievedDirection != dir::down && possibleDirs.down) {
+    } else if (recievedDirection != direction::down && possibleDirs.down) {
       insert(downOut, g);
     } 
   }
@@ -255,59 +251,62 @@ public:
 
   void renderMain(poplar::Input<poplar::Vector<float>> &bufferIn, const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
     const auto tb = tfb.getTileBounds(tile_id[0]);
-
     for (auto i = 0; i < bufferIn.size(); i+=15) {
-      Gaussian2D g = unpackGaussian2D(bufferIn, i);
-      g.cacheTrigIds(); // TODO; remove this VERY BAD PRACTICE
+      Gaussian2D g = unpackGaussian2D(bufferIn, i, viewmatrix, vp);
       directions dirs;
       auto bb = g.getBoundingBox().clip(tb, dirs);
 
-      if (tb.contains(g.mean)) { // is anchored 
+      // if (tb.contains(g.mean)) { // is anchored 
         rasterise(g, bb, tb);
-
-        g.gid = 11;
-        send(g, dirs);
-      } else {
-        evict(bufferIn, i);
-      }
+      //   send(g, dirs);
+      // } else {
+      //   evict(bufferIn, i);
+      // }
     }
   }
 
-  void renderStored(poplar::Input<poplar::Vector<float>> &bufferIn, const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
-    const auto tb = tfb.getTileBounds(tile_id[0]);
-    for (auto i = 0; i < bufferIn.size(); i+=15) {
-      Gaussian2D g = unpackGaussian2D(bufferIn, i);
-      g.cacheTrigIds(); // TODO; remove this VERY BAD PRACTICE
-      auto bb = g.getBoundingBox().clip(tb);
-      rasterise(g, bb, tb);
-      evict(bufferIn, i);
-    }
-  }
-  
+  void readInput(poplar::Input<poplar::Vector<float>> &bufferIn,
+                                    const direction& recievedFrom,
+                                    const glm::mat4& viewmatrix,
+                                    const TiledFramebuffer& tfb,
+                                    const splat::Viewport& vp) {
 
-
-  void renderInput(poplar::Input<poplar::Vector<float>> &bufferIn, const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
     const auto tb = tfb.getTileBounds(tile_id[0]);
+    const auto fromTile = tfb.getNearbyTile(tile_id[0], recievedFrom);
+    const auto fromTb = tfb.getTileBounds(fromTile);
 
     for (auto i = 0; i < bufferIn.size(); i+=15) {
-      Gaussian2D g = unpackGaussian2D(bufferIn, i);
+      Gaussian2D g = unpackGaussian2D(bufferIn, i, viewmatrix, vp);
       if (g.gid == 0) {
         break;
       }
-      g.cacheTrigIds(); // TODO; remove this VERY BAD PRACTICE
+
+      // see whether the gaussian is closer to its destination anchor
+      unsigned dest = tfb.pixCoordToTile(g.mean.x, g.mean.y);
+      const auto destTb = tfb.getTileBounds(dest);
+      const auto curDist = ivec2::manhattanDistance(destTb.min, tb.min); // min or centroid 
+      const auto prevDist = ivec2::manhattanDistance(destTb.min, fromTb.min); // min or centroid
+      bool closer = curDist < prevDist;
 
       directions dirs;
       auto bb = g.getBoundingBox().clip(tb, dirs);
+      rasterise(g, bb, tb);
 
-      if (tb.contains(g.mean)) { // is anchored 
-        rasterise(g, bb, tb);
-        insert(vertsIn, g);
-      } else if (bb.diagonal().length() > 0) {
-        // insert(stored, g);
-        rasterise(g, bb, tb);
-      } 
+      // if (tb.contains(g.mean)) { 
+      //   // is anchored then we will render it
+      //   // later in the main render loop 
+      //   insert(vertsIn, g);
+      // } else if (closer) {
+      //   // sendOnce and evict
+      //   sendOnce(g, dirs, recievedFrom);
+      // } else {
+      //   // if not anchored then we still try to render it
+      //   // but we only send it to the correct neighbour
+      //   rasterise(g, bb, tb);
+      // }
+
     }
-  }
+  } 
 
   bool compute(unsigned workerId) {
 
@@ -338,13 +337,14 @@ public:
     // Transpose because GLM storage order is column major:
     const auto viewmatrix = glm::transpose(glm::make_mat4(&matrix[0]));
 
-    renderInput(rightIn, viewmatrix, tfb, vp);
-    renderInput(leftIn, viewmatrix, tfb, vp);
-    renderInput(upIn, viewmatrix, tfb, vp);
-    renderInput(downIn, viewmatrix, tfb, vp);
-
     renderMain(vertsIn, viewmatrix, tfb, vp);
-    renderStored(stored, viewmatrix, tfb, vp);
+
+    // readInput(rightIn, direction::right, viewmatrix, tfb, vp);
+    // readInput(leftIn, direction::left, viewmatrix, tfb, vp);
+    // readInput(upIn, direction::up, viewmatrix, tfb, vp);
+    // readInput(downIn, direction::down, viewmatrix, tfb, vp);
+
+    // renderStored(stored, viewmatrix, tfb, vp);
 
    
     return true;

@@ -42,6 +42,9 @@ struct ivec2 {
   float length() const {
     return sqrt(x * x + y * y);
   }
+  static float manhattanDistance(ivec2 const &a, ivec2 const &b) {
+    return abs(a.x - b.x) + abs(a.y - b.y);
+  }
 };
 
 typedef struct ivec2 ivec2;
@@ -63,6 +66,13 @@ typedef struct directions {
     static const int NUM_DIRS = 4;
 } directions;
 
+enum direction {
+  left,
+  right,
+  up,
+  down
+};
+
 struct Bounds2f {
   Bounds2f(bool) {
     // Overload to skip default init. Used to preseve contents on references.
@@ -70,9 +80,9 @@ struct Bounds2f {
 
   Bounds2f(const ivec2& _min, const ivec2& _max) : min(_min), max(_max) {}
 
-  // ivec2 centroid() const {
-  //   return (max + min) * .5f;
-  // }
+  ivec2 centroid() const {
+    return (max + min) * .5f;
+  }
 
   ivec2 diagonal() const {
     return max - min;
@@ -158,7 +168,6 @@ struct Primitive {
   unsigned gid;
   virtual Bounds2f getBoundingBox() const = 0;  
   virtual bool inside(float x, float y) const = 0;
-  virtual void cacheTrigIds() {};
 };
 
 struct square : Primitive {
@@ -253,8 +262,8 @@ class Gaussian2D : public Primitive {
     // need to define IPU versions of these functions
     // since cos and sin are compiled differently?
     Bounds2f getBoundingBox() const override {
-      auto c = cos;
-      auto s = sin;
+      auto c = glm::cos(rot.w);
+      auto s = glm::sin(rot.w);
       glm::vec2 eigenvalues = {scale.x, scale.y};
       auto lambdas = (eigenvalues / 2.0f) * (eigenvalues / 2.0f);
       auto dxMax = glm::sqrt(lambdas.x * (c * c) + lambdas.y * (s * s));
@@ -264,8 +273,8 @@ class Gaussian2D : public Primitive {
 
     bool inside(float x, float y) const override {
       // TODO: remove trig fns from per pixel test
-      auto c = cos;
-      auto s = sin;
+      auto c = glm::cos(rot.w);
+      auto s = glm::sin(rot.w);
       auto dd = (scale.x / 2) * (scale.x / 2);
       auto DD = (scale.y / 2) * (scale.y / 2);
       auto a = c * (x - mean.x) + s * (y - mean.y);
@@ -273,21 +282,11 @@ class Gaussian2D : public Primitive {
       return (((a * a) / dd)  + ((b * b) / DD)) <= 1;
     }
 
-    void cacheTrigIds() override {
-      cos = glm::cos(rot.w);
-      sin = glm::sin(rot.w);
-    }
-
     void print() {
       printf("mean: %f, %f, %f, %f ", mean.x, mean.y, mean.z, mean.w);
       printf("scale: %f, %f ", scale.x, scale.y);
       printf("rot: %f, %f, %f, %f ", rot.x, rot.y, rot.z, rot.w);
-      printf("cos: %f, sin: %f ", cos, sin);
     }
-
-    private:
-      float cos;
-      float sin;
 };
 
 #define GAUSSIAN_SIZE sizeof(Gaussian2D)

@@ -125,6 +125,7 @@ int main(int argc, char** argv) {
     g.scale = {1, 1};
     g.rot = {0, 0, 0, 1};
     g.colour = {255, 0, 0, 255};
+    g.gid = i;
     gsns.push_back(g);
   }
 
@@ -157,6 +158,7 @@ int main(int argc, char** argv) {
 
   ipu_utils::logger()->info("Point bounds (eye space): {}", bbInCamera);
   auto projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
+  auto cameraTranslation = glm::mat4x4(1.f);
 
   ipuSplatter->updateModelViewProjection(modelView * projection);
   gm.prepareEngine();
@@ -187,12 +189,12 @@ int main(int argc, char** argv) {
     std::uint32_t count = 0u;
 
     splat::Gaussian2D g;
-    g.mean = {state.X, state.Y};
     g.colour = {1.0f, 0.f, 0.f, 0.9f};
+    g.mean = {640.f, 320.f, 0.f, 1.f};
     g.gid = 9;
     g.scale = {state.lambda1, state.lambda2};
     g.scale = g.scale * 10.0f;
-    g.rot.w = state.envRotationDegrees;
+    cameraTranslation = glm::translate(glm::mat4(1.f), glm::vec3(state.X * 5000.f, state.Y * 5000.f, 0.f));
 
     if (state.device == "cpu") {
       // pvti::Tracepoint scoped(&traceChannel, "mvp_transform_cpu");
@@ -203,7 +205,7 @@ int main(int argc, char** argv) {
       // }
     } else if (state.device == "ipu") {
       pvti::Tracepoint scoped(&traceChannel, "mvp_transform_ipu");
-      // ipuSplatter->updateModelViewProjection(projection * dynamicView);
+      ipuSplatter->updateModelViewProjection(projection * dynamicView);
       ipuSplatter->updateGaussianParams(g);
       gm.execute(*ipuSplatter);
       ipuSplatter->getFrameBuffer(*imagePtr);
@@ -221,7 +223,7 @@ int main(int argc, char** argv) {
       // Update projection:
       projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
       // Update modelview:
-      dynamicView = modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(0.f, 1.f, 0.f));
+      dynamicView = cameraTranslation * modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(0.f, 0.f, 1.f));
     } else {
       // Only log these if not in interactive mode:
       ipu_utils::logger()->info("Splat time: {} points/sec: {}", splatTimeSecs, pts.size()/splatTimeSecs);

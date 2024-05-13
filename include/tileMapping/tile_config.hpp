@@ -63,7 +63,30 @@ public:
     tl.y = floor(div * tileHeight);
     br.x = tl.x + tileWidth;
     br.y = tl.y + tileHeight;
-    return Bounds2f(tl, br);
+    auto bounds = Bounds2f(tl, br);
+    // if (bounds.min.x < 0 || bounds.min.y < 0 || bounds.max.x > width || bounds.max.y > height) {
+    //   printf("Warning!!! Bounds out of range: %f, %f, %f, %f\n", bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y);
+    // }
+    return bounds;
+  }
+
+  unsigned getNearbyTile(unsigned tid, const direction &recievedFrom) const {
+    switch (recievedFrom) {
+      case direction::left:
+        return tid - 1;
+      case direction::right:
+        return tid + 1;
+      case direction::up:
+        return tid - numTilesAcross;
+      case direction::down:
+        return tid + numTilesAcross;
+      default:
+        return tid;
+    }
+  }
+
+  bool isValidTile(unsigned tid) const {
+    return tid < numTiles;
   }
 
   directions checkImageBoundaries(unsigned tid) {

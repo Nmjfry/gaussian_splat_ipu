@@ -6,6 +6,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <ipu/ipu_utils.hpp>
+#include </home/nf20/workspace/gaussian_splat_ipu/include/tileMapping/tile_config.hpp>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -70,6 +71,7 @@ BOOST_AUTO_TEST_CASE(IpuGlm) {
   using namespace poplar;
   spdlog::set_level(spdlog::level::warn);
 
+  BOOST_CHECK_EQUAL(EXIT_SUCCESS, runStatelessVertex("TfbBoundsCheck"));
   BOOST_CHECK_EQUAL(EXIT_SUCCESS, runStatelessVertex("GlmMat4"));
   BOOST_CHECK_EQUAL(EXIT_SUCCESS, runStatelessVertex("GlmTransform"));
 }

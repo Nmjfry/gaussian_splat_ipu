@@ -8,6 +8,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/transform2.hpp>
+#include </home/nf20/workspace/gaussian_splat_ipu/include/tileMapping/tile_config.hpp>
 
 #ifdef __IPU__
 #include <ipu_vector_math>
@@ -63,6 +64,34 @@ public:
     CHECK_EQUAL(transformed.w, 1.f);
     auto zAbsErr = abs(-sqrt(300.f) - transformed.z );
     CHECK_LE(zAbsErr, 0.00001f);
+    return true;
+  }
+};
+
+class TfbBoundsCheck : public poplar::Vertex {
+public:
+  bool compute() {
+    const splat::TiledFramebuffer tfb(IPU_TILEWIDTH, IPU_TILEHEIGHT);
+
+    auto tb = tfb.getTileBounds(3);
+    auto tb1 = tfb.getTileBounds(1);
+    auto dist = splat::ivec2::manhattanDistance(tb.min, tb1.min);
+
+    CHECK_EQUAL(dist, 2 * IPU_TILEWIDTH);
+
+    auto mid120 = tfb.getTileBounds(120).centroid();
+    auto next = tfb.getNearbyTile(120, splat::direction::right);
+    auto down = tfb.getNearbyTile(120, splat::direction::down);
+
+    auto tb2 = tfb.getTileBounds(next);
+    auto tb3 = tfb.getTileBounds(down);
+
+    auto dist2 = splat::ivec2::manhattanDistance(mid120, tb2.centroid());
+    auto dist3 = splat::ivec2::manhattanDistance(mid120, tb3.centroid());
+
+    CHECK_EQUAL(dist2, IPU_TILEWIDTH);
+    CHECK_EQUAL(dist3, IPU_TILEHEIGHT);
+
     return true;
   }
 };
