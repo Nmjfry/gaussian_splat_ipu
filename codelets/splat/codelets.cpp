@@ -32,7 +32,7 @@ DEF_FUNC_CALL_PTRS("_ZN12Transform4x45splatERN5splat9PrimitiveERKNS0_8Bounds2fE"
 class Transform4x4 : public poplar::MultiVertex {
 public:
   poplar::Input<poplar::Vector<float>> matrix;
-  poplar::Input<poplar::Vector<float>> vertsIn;
+  poplar::InOut<poplar::Vector<float>> vertsIn;
 
   poplar::Output<poplar::Vector<float>> localFb;
   poplar::Input<poplar::Vector<int>> tile_id;
@@ -102,7 +102,7 @@ public:
     return true;
   }
 
-  bool insertAt(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx, Gaussian3D& g) {
+  bool insertAt(poplar::InOut<poplar::Vector<float>> &buffer, unsigned idx, Gaussian3D& g) {
     if (idx + 16 > buffer.size()) {
       return false;
     }
@@ -114,13 +114,13 @@ public:
     return true;
   }
 
-  bool insert(poplar::Input<poplar::Vector<float>> &buffer, Gaussian3D& g) {
+  bool insert(poplar::InOut<poplar::Vector<float>> &buffer, Gaussian3D& g) {
     unsigned idx = buffer.size();
     for (auto i = 0; i < buffer.size(); i+=16) {
-      unsigned gid;
+      float gid;
       memcpy(&gid, &buffer[i+8], sizeof(gid)); // TODO: specify gid
       if (gid == g.gid) {
-        return insertAt(buffer, i, g);
+        return false;
       }
       if (gid == 0u && i < idx) {
         idx = i;
@@ -132,7 +132,7 @@ public:
   bool insert(poplar::Vector<float> &buffer, Gaussian3D& g) {
     unsigned idx = buffer.size();
     for (auto i = 0; i < buffer.size(); i+=16) {
-      unsigned gid;
+      float gid;
       memcpy(&gid, &buffer[i+8], sizeof(gid)); // TODO: specify gid
       if (gid == g.gid) {
         return insertAt(buffer, i, g);
@@ -146,7 +146,7 @@ public:
 
   // TODO: change to use templates instead of inheritance as virtual function insert 
   // vtable pointer so unpacking structs needs to be shifted by 1
-  Gaussian3D unpackGaussian3D(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx, const glm::mat4& viewmatrix, const splat::Viewport& vp) {
+  Gaussian3D unpackGaussian3D(poplar::InOut<poplar::Vector<float>> &buffer, unsigned idx, const glm::mat4& viewmatrix, const splat::Viewport& vp) {
     // ivec4 mean;  // in world space
     // ivec4 colour; // RGBA color space
     // unsigned gid;
@@ -166,7 +166,7 @@ public:
     memcpy(&mean, &buffer[idx], sizeof(mean));
     ivec4 colour;
     memcpy(&colour, &buffer[idx+4], sizeof(colour));
-    unsigned gid;
+    float gid;
     memcpy(&gid, &buffer[idx+8], sizeof(gid));
     ivec3 scale;
     memcpy(&scale, &buffer[idx+9], sizeof(scale));
@@ -194,13 +194,13 @@ public:
     // invalidate a gaussian in the buffer
   void evict(poplar::Vector<float> &buffer, unsigned idx) {
     Gaussian3D g;
-    g.gid = 0;
+    g.gid = 0.f;
     insertAt(buffer, idx, g);
   }
 
-  void evict(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx) {
+  void evict(poplar::InOut<poplar::Vector<float>> &buffer, unsigned idx) {
     Gaussian3D g;
-    g.gid = 0;
+    g.gid = 0.f;
     insertAt(buffer, idx, g);
   }
 
@@ -255,87 +255,75 @@ public:
     return count;
   }
 
-  void renderMain(poplar::Input<poplar::Vector<float>> &bufferIn, const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
+  void renderMain(poplar::InOut<poplar::Vector<float>> &bufferIn, const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
     const auto tb = tfb.getTileBounds(tile_id[0]);
     for (auto i = 0; i < bufferIn.size(); i+=16) {
       Gaussian3D g = unpackGaussian3D(bufferIn, i, viewmatrix, vp);
-      if (g.gid == 0) {
+      if (g.gid <= 0) {
         break;
       }
 
       ivec3 cov2D = g.ComputeCov2D(viewmatrix, 1.0f, 1.0f);
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
       auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
-      Gaussian2D g2D = Gaussian2D({projMean.x, projMean.y}, g.colour, cov2D);
+      Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
 
       auto bb = g2D.GetBoundingBox();
+
       directions dirs;
       bb = bb.clip(tb, dirs);
 
-      auto tc = getTileColour();
-
-      for (auto i = bb.min.x; i < bb.max.x; i++) {
-        for (auto j = bb.min.y; j < bb.max.y; j++) {
-          auto px = viewspaceToTile({i, j}, tb.min);
-          if(g2D.inside(i,j)) {
-            setPixel(px.x, px.y, g.colour);
-          } else {
-            setPixel(px.x, px.y, tc);
-          }
-        }
+      if (tb.contains(g2D.mean)) { // is anchored 
+        rasterise(g2D, bb, tb);
+        send(g, dirs);
+      } else {
+        evict(bufferIn, i);
       }
-
-      // if (tb.contains(g.mean)) { // is anchored 
-      // rasterise(g, bb, tb);
-      //   send(g, dirs);
-      // } else {
-      //   evict(bufferIn, i);
-      // }
     }
   }
 
-  void readInput(poplar::Input<poplar::Vector<float>> &bufferIn,
-                                    const direction& recievedFrom,
-                                    const glm::mat4& viewmatrix,
-                                    const TiledFramebuffer& tfb,
-                                    const splat::Viewport& vp) {
+  // void readInput(poplar::Input<poplar::Vector<float>> &bufferIn,
+  //                                   const direction& recievedFrom,
+  //                                   const glm::mat4& viewmatrix,
+  //                                   const TiledFramebuffer& tfb,
+  //                                   const splat::Viewport& vp) {
 
-    const auto tb = tfb.getTileBounds(tile_id[0]);
-    const auto fromTile = tfb.getNearbyTile(tile_id[0], recievedFrom);
-    const auto fromTb = tfb.getTileBounds(fromTile);
+  //   const auto tb = tfb.getTileBounds(tile_id[0]);
+  //   const auto fromTile = tfb.getNearbyTile(tile_id[0], recievedFrom);
+  //   const auto fromTb = tfb.getTileBounds(fromTile);
 
-    for (auto i = 0; i < bufferIn.size(); i+=16) {
-      Gaussian3D g = unpackGaussian3D(bufferIn, i, viewmatrix, vp);
-      if (g.gid == 0) {
-        break;
-      }
+  //   for (auto i = 0; i < bufferIn.size(); i+=16) {
+  //     Gaussian3D g = unpackGaussian3D(bufferIn, i, viewmatrix, vp);
+  //     if (g.gid == 0) {
+  //       break;
+  //     }
 
-      // see whether the gaussian is closer to its destination anchor
-      unsigned dest = tfb.pixCoordToTile(g.mean.x, g.mean.y);
-      const auto destTb = tfb.getTileBounds(dest);
-      const auto curDist = ivec2::manhattanDistance(destTb.min, tb.min); // min or centroid 
-      const auto prevDist = ivec2::manhattanDistance(destTb.min, fromTb.min); // min or centroid
-      bool closer = curDist < prevDist;
+  //     // see whether the gaussian is closer to its destination anchor
+  //     unsigned dest = tfb.pixCoordToTile(g.mean.x, g.mean.y);
+  //     const auto destTb = tfb.getTileBounds(dest);
+  //     const auto curDist = ivec2::manhattanDistance(destTb.min, tb.min); // min or centroid 
+  //     const auto prevDist = ivec2::manhattanDistance(destTb.min, fromTb.min); // min or centroid
+  //     bool closer = curDist < prevDist;
 
-      // directions dirs;
-      // auto bb = g.getBoundingBox().clip(tb, dirs);
-      // rasterise(g, bb, tb);
+  //     // directions dirs;
+  //     // auto bb = g.getBoundingBox().clip(tb, dirs);
+  //     // rasterise(g, bb, tb);
 
-      // if (tb.contains(g.mean)) { 
-      //   // is anchored then we will render it
-      //   // later in the main render loop 
-      //   insert(vertsIn, g);
-      // } else if (closer) {
-      //   // sendOnce and evict
-      //   sendOnce(g, dirs, recievedFrom);
-      // } else {
-      //   // if not anchored then we still try to render it
-      //   // but we only send it to the correct neighbour
-      //   rasterise(g, bb, tb);
-      // }
+  //     // if (tb.contains(g.mean)) { 
+  //     //   // is anchored then we will render it
+  //     //   // later in the main render loop 
+  //     //   insert(vertsIn, g);
+  //     // } else if (closer) {
+  //     //   // sendOnce and evict
+  //     //   sendOnce(g, dirs, recievedFrom);
+  //     // } else {
+  //     //   // if not anchored then we still try to render it
+  //     //   // but we only send it to the correct neighbour
+  //     //   rasterise(g, bb, tb);
+  //     // }
 
-    }
-  } 
+  //   }
+  // } 
 
   bool compute(unsigned workerId) {
 

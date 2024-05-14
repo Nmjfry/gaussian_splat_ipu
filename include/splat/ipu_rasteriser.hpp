@@ -25,7 +25,6 @@ public:
   virtual ~IpuSplatter() {}
 
   void updateModelViewProjection(const glm::mat4& mvp);
-  void updateGaussianParams(const Gaussian3D& g);
   void getProjectedPoints(std::vector<glm::vec4>& pts) const;
   void getFrameBuffer(cv::Mat &frame) const;
 

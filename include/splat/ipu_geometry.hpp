@@ -177,7 +177,7 @@ struct Bounds2f {
 struct Primitive {
   ivec4 mean; // in world space
   ivec4 colour; // RGBA colour space
-  unsigned gid;
+  float gid;
   virtual Bounds2f getBoundingBox() const = 0;  
   virtual bool inside(float x, float y) const = 0;
 };
@@ -287,7 +287,7 @@ class Gaussian3D {
   public:
     ivec4 mean; // in world space
     ivec4 colour; // RGBA colour space
-    unsigned gid;
+    float gid;
     ivec3 scale;
     ivec4 rot;  // local rotation of gaussian (real, i, j, k)
 

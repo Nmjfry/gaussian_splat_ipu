@@ -121,12 +121,12 @@ int main(int argc, char** argv) {
   // make fb.numTiles copies of a 2D gaussian
   splat::Gaussians gsns;
   for (std::size_t i = 0; i < fb.numTiles; ++i) {
+
     splat::Gaussian3D g;
+    g.colour = {1.0f, 0.f, 0.f, 0.9f};
     g.mean = {centre.x, centre.y, centre.z, 1.f};
-    g.scale = {30, 0, 30};
-    g.rot = {0, 0, 0, 1};
-    g.colour = {255, 0, 0, 255};
-    g.gid = i;
+    g.gid = 9;
+    g.scale = {1.0f, 1.0f, 1.0f};
     gsns.push_back(g);
   }
 
@@ -189,12 +189,6 @@ int main(int argc, char** argv) {
     *imagePtr = 0;
     std::uint32_t count = 0u;
 
-    splat::Gaussian3D g;
-    g.colour = {1.0f, 0.f, 0.f, 0.9f};
-    g.mean = {centre.x, centre.y, centre.z, 1.f};
-    g.gid = 9;
-    g.scale = {1.0f, 1.0f, 1.0f};
-
     if (state.device == "cpu") {
       // pvti::Tracepoint scoped(&traceChannel, "mvp_transform_cpu");
       // projectPoints(pts, projection, dynamicView, clipSpace);
@@ -205,7 +199,6 @@ int main(int argc, char** argv) {
     } else if (state.device == "ipu") {
       pvti::Tracepoint scoped(&traceChannel, "mvp_transform_ipu");
       ipuSplatter->updateModelViewProjection(projection * dynamicView);
-      ipuSplatter->updateGaussianParams(g);
       gm.execute(*ipuSplatter);
       ipuSplatter->getFrameBuffer(*imagePtr);
     }

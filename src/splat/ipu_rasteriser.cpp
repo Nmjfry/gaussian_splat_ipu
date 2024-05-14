@@ -85,32 +85,6 @@ void IpuSplatter::updateModelViewProjection(const glm::mat4& mvp) {
   }
 }
 
-void IpuSplatter::updateGaussianParams(const Gaussian3D& g) {
-  for (auto i = 0u; i < hostVertices.size(); i+=16) {
-    // ivec4 mean; // in world space
-    // ivec4 colour; // RGBA colour space
-    // unsigned gid;
-    // ivec2 scale;
-    // ivec4 rot;  // local rotation of gaussian (real, i, j, k)
-    hostVertices[i] = g.mean.x;
-    hostVertices[i + 1] = g.mean.y;
-    hostVertices[i + 2] = g.mean.z;
-    hostVertices[i + 3] = g.mean.w;
-    hostVertices[i + 4] = g.colour.x;
-    hostVertices[i + 5] = g.colour.y;
-    hostVertices[i + 6] = g.colour.z;
-    hostVertices[i + 7] = g.colour.w;
-    hostVertices[i + 8] = g.gid;
-    hostVertices[i + 9] = g.scale.x;
-    hostVertices[i + 10] = g.scale.y;
-    hostVertices[i + 11] = g.scale.z;
-    hostVertices[i + 12] = g.rot.x;
-    hostVertices[i + 13] = g.rot.y;
-    hostVertices[i + 14] = g.rot.z;
-    hostVertices[i + 15] = g.rot.w * glm::pi<float>() / 180.0f;
-  }
-}
-
 // takes a cv::Mat image and returns a copy of the original but with the image partitioned into tiles of size tileHeight x tileWidth.
 // dataType is the data type of the image (e.g. CV_8UC3 for 8-bit unsigned char 3-channel image)
 // It treats the image as one vector of pixels which we pick from in chunks of tileHeight x tileWidth
@@ -408,7 +382,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   main.add(outputFramebuffer.buildRead(vg, true));
 
   program::Sequence setup;
-  main.add(inputVertices.buildWrite(vg, true));
+  setup.add(inputVertices.buildWrite(vg, true));
 
   getPrograms().add("write_verts", setup);
   getPrograms().add("project", main);
