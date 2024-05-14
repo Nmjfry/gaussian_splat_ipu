@@ -53,6 +53,18 @@ struct ivec3 {
   float x;
   float y;
   float z;
+  struct ivec3 operator+(ivec3 const &other) {
+    return {x + other.x, y + other.y, z + other.z};
+  }
+  struct ivec3 operator-(ivec3 const &other) {
+    return {x - other.x, y - other.y, z - other.z};
+  }
+  struct ivec3 operator*(float const &scalar) {
+    return {x * scalar, y * scalar, z * scalar};
+  }
+  struct ivec3 operator/(float const &scalar) {
+    return {x / scalar, y / scalar, z / scalar};
+  }
 };
 
 typedef struct ivec3 ivec3;
@@ -215,80 +227,125 @@ struct square : Primitive {
   }
 };
 
-struct Gaussian : Primitive {
-    float f_dc[3];  // first order spherical harmonics coeff (sRGB color space)
-    float f_rest[45];  // more spherical harminics coeff
-    float scale[3];
-    float rot[4];  // local rotation of guassian (real, i, j, k)
+struct Gaussian2D {
+  ivec2 mean; // in screen space
+  ivec4 colour; // RGBA colour space
+  ivec3 cov2D;
 
-    // convert from (scale, rot) into the gaussian covariance matrix in world space
-    // See 3d Gaussian Splat paper for more info
-    glm::mat3 ComputeCovMat() const
-    {
-        glm::quat q(rot[0], rot[1], rot[2], rot[3]);
-        glm::mat3 R(glm::normalize(q));
-        glm::mat3 S(glm::vec3(expf(scale[0]), 0.0f, 0.0f),
-                    glm::vec3(0.0f, expf(scale[1]), 0.0f),
-                    glm::vec3(0.0f, 0.0f, expf(scale[2])));
-        return R * S * glm::transpose(S) * glm::transpose(R);
-    }
+  Gaussian2D(ivec2 _mean, ivec4 _colour, ivec3 _cov2D) : mean(_mean), colour(_colour), cov2D(_cov2D) {}
 
-    Bounds2f getBoundingBox() const override {
-      return Bounds2f({mean.x - 10.0f, mean.y - 10.0f}, {mean.x + 10.0f, mean.y + 10.0f});
-    }
+  static float max(float a, float b) {
+    return a > b ? a : b;
+  }
 
-    bool inside(float x, float y) const override {
-      return true;
+  // computes the eigenvalues and rotation from the 2D covariance matrix
+  glm::vec3 ComputeEigenvalues() const {
+    float det = cov2D.x * cov2D.z - cov2D.y * cov2D.y;
+    float mid = .5f * (cov2D.x + cov2D.z);
+    float lambda1 = mid + glm::sqrt(max(0.1f, mid * mid - det));
+    float lambda2 = mid - glm::sqrt(max(0.1f, mid * mid - det));
+    float theta;
+    if (cov2D.y == 0 && cov2D.x >= cov2D.z) {
+      theta = 0;
+    } else if (cov2D.y == 0 && cov2D.x < cov2D.z) {
+      theta = glm::pi<float>() / 2.f;
+    } else {
+      theta = glm::atan(lambda1 - cov2D.x, cov2D.y);
     }
+    return {lambda1, lambda2, theta};
+  }
+
+  Bounds2f GetBoundingBox() const {
+    float det = cov2D.x * cov2D.z - cov2D.y * cov2D.y;
+    if (det == 0) {
+      return Bounds2f({mean.x, mean.y}, {mean.x, mean.y});
+    }
+    float mid = .5f * (cov2D.x + cov2D.z);
+    float dif = glm::sqrt(max(0.1f, mid * mid - det));
+    float lambda1 = mid + dif;
+    float lambda2 = mid - dif;
+    return Bounds2f({mean.x - lambda1, mean.y - lambda2}, {mean.x + lambda1, mean.y + lambda2});
+  }
+
+  // Pixel test to see if a pixel is inside the gaussian
+  bool inside(float x, float y) const {
+    auto es = ComputeEigenvalues();
+    auto theta = es.z;
+    auto c = glm::cos(theta);
+    auto s =  glm::sin(theta);
+    auto e1 = es.x;
+    auto e2 = es.y;
+    auto dd = (e1 / 2) * (e1 / 2);
+    auto DD = (e2 / 2) * (e2 / 2);
+    auto a = c * (x - mean.x) + s * (y - mean.y);
+    auto b = s * (x - mean.x) - c * (y - mean.y);
+    return (((a * a) / dd)  + ((b * b) / DD)) <= 1;
+  }
+
 };
 
-class Gaussian2D : public Primitive {
+class Gaussian3D {
   public:
-    ivec2 scale;
+    ivec4 mean; // in world space
+    ivec4 colour; // RGBA colour space
+    unsigned gid;
+    ivec3 scale;
     ivec4 rot;  // local rotation of gaussian (real, i, j, k)
 
     // convert from (scale, rot) into the gaussian covariance matrix in world space
     // See 3d Gaussian Splat paper for more info
-    glm::mat3 ComputeCovMat() const
+    glm::mat3 ComputeCov3D() const
     {
         glm::quat q(rot.x, rot.y, rot.z, rot.w);
         glm::mat3 R(glm::normalize(q));
         glm::mat3 S(glm::vec3(expf(scale.x), 0.0f, 0.0f),
                     glm::vec3(0.0f, expf(scale.y), 0.0f),
-                    glm::vec3(0.0f, 0.0f, 1.f));
+                    glm::vec3(0.0f, 0.0f, expf(scale.z)));
         return R * S * glm::transpose(S) * glm::transpose(R);
     }
 
-    // need to define IPU versions of these functions
-    // since cos and sin are compiled differently?
-    Bounds2f getBoundingBox() const override {
-      auto c = glm::cos(rot.w);
-      auto s = glm::sin(rot.w);
-      glm::vec2 eigenvalues = {scale.x, scale.y};
-      auto lambdas = (eigenvalues / 2.0f) * (eigenvalues / 2.0f);
-      auto dxMax = glm::sqrt(lambdas.x * (c * c) + lambdas.y * (s * s));
-      auto dyMax = glm::sqrt(lambdas.x * (s * s) + lambdas.y * (c * c));
-      return Bounds2f({mean.x - dxMax, mean.y - dyMax}, {mean.x + dxMax, mean.y + dyMax});
+    static float max(float a, float b) {
+      return a > b ? a : b;
     }
 
-    bool inside(float x, float y) const override {
-      // TODO: remove trig fns from per pixel test
-      auto c = glm::cos(rot.w);
-      auto s = glm::sin(rot.w);
-      auto dd = (scale.x / 2) * (scale.x / 2);
-      auto DD = (scale.y / 2) * (scale.y / 2);
-      auto a = c * (x - mean.x) + s * (y - mean.y);
-      auto b = s * (x - mean.x) - c * (y - mean.y);
-      return (((a * a) / dd)  + ((b * b) / DD)) <= 1;
+    static float min(float a, float b) {
+      return a < b ? a : b;
     }
 
-    void print() {
-      printf("mean: %f, %f, %f, %f ", mean.x, mean.y, mean.z, mean.w);
-      printf("scale: %f, %f ", scale.x, scale.y);
-      printf("rot: %f, %f, %f, %f ", rot.x, rot.y, rot.z, rot.w);
+    ivec3 ComputeCov2D(const glm::mat4& mvp, float tan_fovx, float tan_fovy) {
+      glm::vec3 t = glm::vec3(mvp * glm::vec4(mean.x, mean.y, mean.z, 1.f));
+      const float limx = 1.3f * tan_fovx;
+      const float limy = 1.3f * tan_fovy;
+      const float txtz = t.x / t.z;
+      const float tytz = t.y / t.z;
+      t.x = min(limx, max(-limx, txtz)) * t.z;
+      t.y = min(limy, max(-limy, tytz)) * t.z;
+
+      const float focal_x = 1.f;
+      const float focal_y = 1.f;
+
+      glm::mat3 J = glm::mat3(
+        focal_x / t.z, 0.0f, -(focal_x * t.x) / (t.z * t.z),
+        0.0f, focal_y / t.z, -(focal_y * t.y) / (t.z * t.z),
+        0, 0, 0);
+
+      glm::mat3 W = glm::mat3(mvp);
+
+      glm::mat3 T = W * J;
+
+      glm::mat3 cov3D = ComputeCov3D();
+
+      glm::mat3 cov = glm::transpose(T) * glm::transpose(cov3D) * T;
+
+      // Apply low-pass filter: every Gaussian should be at least
+      // one pixel wide/high. Discard 3rd row and column.
+      cov[0][0] += 0.3f;
+      cov[1][1] += 0.3f;
+
+      return { float(cov[0][0]), float(cov[0][1]), float(cov[1][1]) };
     }
 };
 
-#define GAUSSIAN_SIZE sizeof(Gaussian2D)
+#define GAUSSIAN_SIZE sizeof(Gaussian3D)
 
-} // end of namespace splat
+} 

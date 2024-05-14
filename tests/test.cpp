@@ -74,4 +74,5 @@ BOOST_AUTO_TEST_CASE(IpuGlm) {
   BOOST_CHECK_EQUAL(EXIT_SUCCESS, runStatelessVertex("TfbBoundsCheck"));
   BOOST_CHECK_EQUAL(EXIT_SUCCESS, runStatelessVertex("GlmMat4"));
   BOOST_CHECK_EQUAL(EXIT_SUCCESS, runStatelessVertex("GlmTransform"));
+  BOOST_CHECK_EQUAL(EXIT_SUCCESS, runStatelessVertex("GaussianTests"));
 }

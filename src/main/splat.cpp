@@ -117,12 +117,13 @@ int main(int argc, char** argv) {
   ipu_utils::logger()->info("Tile index test. Pix coord {}, {} -> tile id: {}", x, y, tileId);
 
 
+  auto centre = bb.centroid();
   // make fb.numTiles copies of a 2D gaussian
   splat::Gaussians gsns;
   for (std::size_t i = 0; i < fb.numTiles; ++i) {
-    splat::Gaussian2D g;
-    g.mean = {0, 0, 0, 0};
-    g.scale = {1, 1};
+    splat::Gaussian3D g;
+    g.mean = {centre.x, centre.y, centre.z, 1.f};
+    g.scale = {30, 0, 30};
     g.rot = {0, 0, 0, 1};
     g.colour = {255, 0, 0, 255};
     g.gid = i;
@@ -188,13 +189,12 @@ int main(int argc, char** argv) {
     *imagePtr = 0;
     std::uint32_t count = 0u;
 
-    splat::Gaussian2D g;
+    splat::Gaussian3D g;
     g.colour = {1.0f, 0.f, 0.f, 0.9f};
-    g.mean = {640.f, 320.f, 0.f, 1.f};
+    g.mean = {centre.x, centre.y, centre.z, 1.f};
     g.gid = 9;
-    g.scale = {state.lambda1, state.lambda2};
-    g.scale = g.scale * 10.0f;
-    cameraTranslation = glm::translate(glm::mat4(1.f), glm::vec3(state.X * 5000.f, state.Y * 5000.f, 0.f));
+    g.scale = {2.0f, 0.f, 4.0f};
+    cameraTranslation = glm::translate(glm::mat4(1.f), glm::vec3(state.X, state.Y, state.Z));
 
     if (state.device == "cpu") {
       // pvti::Tracepoint scoped(&traceChannel, "mvp_transform_cpu");

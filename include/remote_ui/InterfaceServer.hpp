@@ -30,6 +30,7 @@ const std::vector<std::string> packetTypes {
     "gamma",               // Update tone-map gamma (client -> server)
     "X",                   // Update X pos of gaussian mean (client -> server)
     "Y",                   // Update Y pos of gaussian mean (client -> server)
+    "Z",                   // Update Z pos of gaussian mean (client -> server)
     "lambda1",             // Update lambda1 of gaussian (client -> server)
     "lambda2",             // Update lambda2 of gaussian (client -> server)
     "fov",                 // Update field-of-view (bi-directional)
@@ -156,6 +157,13 @@ class InterfaceServer {
                                         stateUpdated = true;
                                       });
 
+      auto subs52 = receiver.subscribe("Z",
+                                      [&](const ComPacket::ConstSharedPacket& packet) {
+                                        deserialise(packet, state.Z);
+                                        ipu_utils::logger()->trace("Z new value: {}", state.Z);
+                                        stateUpdated = true;
+                                      });
+
       auto subs61 = receiver.subscribe("lambda1",
                                       [&](const ComPacket::ConstSharedPacket& packet) {
                                         deserialise(packet, state.lambda1);
@@ -217,6 +225,7 @@ public:
     float gamma = 2.2f;
     float X = 640.f;
     float Y = 360.f;
+    float Z = 1.f;
     float lambda1 = 1.f;
     float lambda2 = 1.f;
     float fov = 90.f;

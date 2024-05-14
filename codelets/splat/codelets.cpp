@@ -86,37 +86,37 @@ public:
     return c;
   }
 
-  bool tileContainsBoundary(Primitive &p, const Bounds2f& tb) {
-    return (p.inside(tb.min.x, tb.min.y) || p.inside(tb.min.x, tb.max.y) || p.inside(tb.max.x, tb.min.y) || p.inside(tb.max.x, tb.max.y));
-  }
+  // bool tileContainsBoundary(Primitive &p, const Bounds2f& tb) {
+  //   return (p.inside(tb.min.x, tb.min.y) || p.inside(tb.min.x, tb.max.y) || p.inside(tb.max.x, tb.min.y) || p.inside(tb.max.x, tb.max.y));
+  // }
 
-  bool insertAt(poplar::Vector<float> &buffer, unsigned idx, Gaussian2D& g) {
-    if (idx + 15 > buffer.size()) {
+  bool insertAt(poplar::Vector<float> &buffer, unsigned idx, Gaussian3D& g) {
+    if (idx + 16 > buffer.size()) {
       return false;
     }
     memcpy(&buffer[idx], &g.mean, sizeof(g.mean));
     memcpy(&buffer[idx+4], &g.colour, sizeof(g.colour));
     memcpy(&buffer[idx+8], &g.gid, sizeof(g.gid));
     memcpy(&buffer[idx+9], &g.scale, sizeof(g.scale));
-    memcpy(&buffer[idx+11], &g.rot, sizeof(g.rot));
+    memcpy(&buffer[idx+12], &g.rot, sizeof(g.rot));
     return true;
   }
 
-  bool insertAt(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx, Gaussian2D& g) {
-    if (idx + 15 > buffer.size()) {
+  bool insertAt(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx, Gaussian3D& g) {
+    if (idx + 16 > buffer.size()) {
       return false;
     }
     memcpy((void *) &buffer[idx], &g.mean, sizeof(g.mean));
     memcpy((void *) &buffer[idx+4], &g.colour, sizeof(g.colour));
     memcpy((void *) &buffer[idx+8], &g.gid, sizeof(g.gid));
     memcpy((void *) &buffer[idx+9], &g.scale, sizeof(g.scale));
-    memcpy((void *) &buffer[idx+11], &g.rot, sizeof(g.rot));
+    memcpy((void *) &buffer[idx+12], &g.rot, sizeof(g.rot));
     return true;
   }
 
-  bool insert(poplar::Input<poplar::Vector<float>> &buffer, Gaussian2D& g) {
+  bool insert(poplar::Input<poplar::Vector<float>> &buffer, Gaussian3D& g) {
     unsigned idx = buffer.size();
-    for (auto i = 0; i < buffer.size(); i+=15) {
+    for (auto i = 0; i < buffer.size(); i+=16) {
       unsigned gid;
       memcpy(&gid, &buffer[i+8], sizeof(gid)); // TODO: specify gid
       if (gid == g.gid) {
@@ -129,9 +129,9 @@ public:
     return insertAt(buffer, idx, g);
   }
 
-  bool insert(poplar::Vector<float> &buffer, Gaussian2D& g) {
+  bool insert(poplar::Vector<float> &buffer, Gaussian3D& g) {
     unsigned idx = buffer.size();
-    for (auto i = 0; i < buffer.size(); i+=15) {
+    for (auto i = 0; i < buffer.size(); i+=16) {
       unsigned gid;
       memcpy(&gid, &buffer[i+8], sizeof(gid)); // TODO: specify gid
       if (gid == g.gid) {
@@ -146,13 +146,13 @@ public:
 
   // TODO: change to use templates instead of inheritance as virtual function insert 
   // vtable pointer so unpacking structs needs to be shifted by 1
-  Gaussian2D unpackGaussian2D(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx, const glm::mat4& viewmatrix, const splat::Viewport& vp) {
+  Gaussian3D unpackGaussian3D(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx, const glm::mat4& viewmatrix, const splat::Viewport& vp) {
     // ivec4 mean;  // in world space
     // ivec4 colour; // RGBA color space
     // unsigned gid;
     // ivec2 scale;
     // ivec4 rot;  // local rotation of gaussian (real, i, j, k)
-    struct Gaussian2D g;
+    struct Gaussian3D g;
     // memcpy(&g, &buffer[idx], sizeof(g));
 
     // printf("mean %f %f %f %f\n", g.mean.x, g.mean.y, g.mean.z, g.mean.w);
@@ -168,16 +168,22 @@ public:
     memcpy(&colour, &buffer[idx+4], sizeof(colour));
     unsigned gid;
     memcpy(&gid, &buffer[idx+8], sizeof(gid));
-    ivec2 scale;
+    ivec3 scale;
     memcpy(&scale, &buffer[idx+9], sizeof(scale));
     ivec4 rot;
-    memcpy(&rot, &buffer[idx+11], sizeof(rot));
+    memcpy(&rot, &buffer[idx+12], sizeof(rot));
 
-    glm::vec4 glmMean = {mean.x, mean.y, mean.z, mean.w};
-    auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
 
-    g.mean = {projMean.x, projMean.y, 0.f, 1.0f};
-    g.scale = scale;
+    // glm::mat2 vm2 = glm::mat2(viewmatrix);
+    // glm::mat2 cov2D;
+    // cov2D[0][0] = scale.x;
+    // cov2D[0][1] = scale.y;
+    // cov2D[1][0] = scale.y;
+    // cov2D[1][1] = scale.z;
+    // glm::mat2 newCov = vm2 * cov2D * glm::transpose(vm2);
+
+    g.mean = mean;
+    g.scale = scale; //{cov2D[0][0], cov2D[0][1], cov2D[1][1]};
     g.rot = rot;
     g.colour = colour;
     g.gid = gid;
@@ -187,18 +193,18 @@ public:
 
     // invalidate a gaussian in the buffer
   void evict(poplar::Vector<float> &buffer, unsigned idx) {
-    Gaussian2D g;
+    Gaussian3D g;
     g.gid = 0;
     insertAt(buffer, idx, g);
   }
 
   void evict(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx) {
-    Gaussian2D g;
+    Gaussian3D g;
     g.gid = 0;
     insertAt(buffer, idx, g);
   }
 
-  void send(Gaussian2D &g, directions dirs) {
+  void send(Gaussian3D &g, directions dirs) {
     if (dirs.right) {
       insert(rightOut, g);
     }
@@ -213,7 +219,7 @@ public:
     }
   }
 
-  void sendOnce(Gaussian2D &g, directions possibleDirs, direction recievedDirection) {
+  void sendOnce(Gaussian3D &g, directions possibleDirs, direction recievedDirection) {
     if (recievedDirection != direction::right && possibleDirs.right) {
       insert(rightOut, g);
     } else if (recievedDirection != direction::left && possibleDirs.left) {
@@ -251,13 +257,36 @@ public:
 
   void renderMain(poplar::Input<poplar::Vector<float>> &bufferIn, const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
     const auto tb = tfb.getTileBounds(tile_id[0]);
-    for (auto i = 0; i < bufferIn.size(); i+=15) {
-      Gaussian2D g = unpackGaussian2D(bufferIn, i, viewmatrix, vp);
+    for (auto i = 0; i < bufferIn.size(); i+=16) {
+      Gaussian3D g = unpackGaussian3D(bufferIn, i, viewmatrix, vp);
+      if (g.gid == 0) {
+        break;
+      }
+
+      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 1.0f, 1.0f);
+      glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
+      auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
+      Gaussian2D g2D = Gaussian2D({projMean.x, projMean.y}, g.colour, cov2D);
+
+      auto bb = g2D.GetBoundingBox();
       directions dirs;
-      auto bb = g.getBoundingBox().clip(tb, dirs);
+      bb = bb.clip(tb, dirs);
+
+      auto tc = getTileColour();
+
+      for (auto i = bb.min.x; i < bb.max.x; i++) {
+        for (auto j = bb.min.y; j < bb.max.y; j++) {
+          auto px = viewspaceToTile({i, j}, tb.min);
+          if(g2D.inside(i,j)) {
+            setPixel(px.x, px.y, g.colour);
+          } else {
+            setPixel(px.x, px.y, tc);
+          }
+        }
+      }
 
       // if (tb.contains(g.mean)) { // is anchored 
-        rasterise(g, bb, tb);
+      // rasterise(g, bb, tb);
       //   send(g, dirs);
       // } else {
       //   evict(bufferIn, i);
@@ -275,8 +304,8 @@ public:
     const auto fromTile = tfb.getNearbyTile(tile_id[0], recievedFrom);
     const auto fromTb = tfb.getTileBounds(fromTile);
 
-    for (auto i = 0; i < bufferIn.size(); i+=15) {
-      Gaussian2D g = unpackGaussian2D(bufferIn, i, viewmatrix, vp);
+    for (auto i = 0; i < bufferIn.size(); i+=16) {
+      Gaussian3D g = unpackGaussian3D(bufferIn, i, viewmatrix, vp);
       if (g.gid == 0) {
         break;
       }
@@ -288,9 +317,9 @@ public:
       const auto prevDist = ivec2::manhattanDistance(destTb.min, fromTb.min); // min or centroid
       bool closer = curDist < prevDist;
 
-      directions dirs;
-      auto bb = g.getBoundingBox().clip(tb, dirs);
-      rasterise(g, bb, tb);
+      // directions dirs;
+      // auto bb = g.getBoundingBox().clip(tb, dirs);
+      // rasterise(g, bb, tb);
 
       // if (tb.contains(g.mean)) { 
       //   // is anchored then we will render it
@@ -314,16 +343,16 @@ public:
     colourFb({0.0f, 0.0f, 0.0f, 0.0f}, workerId);
 
     //clear all of the out buffers:
-    for (auto i = 0; i < rightOut.size(); i+=15) {
+    for (auto i = 0; i < rightOut.size(); i+=16) {
       evict(rightOut, i);
     }
-    for (auto i = 0; i < leftOut.size(); i+=15) {
+    for (auto i = 0; i < leftOut.size(); i+=16) {
       evict(leftOut, i);
     }
-    for (auto i = 0; i < upOut.size(); i+=15) {
+    for (auto i = 0; i < upOut.size(); i+=16) {
       evict(upOut, i);
     }
-    for (auto i = 0; i < downOut.size(); i+=15) {
+    for (auto i = 0; i < downOut.size(); i+=16) {
       evict(downOut, i);
     }
   

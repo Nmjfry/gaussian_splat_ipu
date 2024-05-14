@@ -95,3 +95,32 @@ public:
     return true;
   }
 };
+
+class GaussianTests : public poplar::Vertex {
+  public:
+  bool compute() {
+    const splat::TiledFramebuffer tfb(IPU_TILEWIDTH, IPU_TILEHEIGHT);
+
+    splat::Gaussian3D g;
+    g.colour = {1.0f, 0.f, 0.f, 0.9f};
+    g.mean = {640.f, 320.f, 0.f, 1.f};
+    g.gid = 9;
+    g.scale = {4.0f, 0.f, 4.0f};
+
+    splat::Bounds2f bb = g.getBoundingBox();
+    printf("Bounds: %f %f %f %f\n", bb.min.x, bb.min.y, bb.max.x, bb.max.y);
+
+    bool inside = g.inside(640.f, 320.f);
+    bool outside = g.inside(bb.min.x, bb.min.y);
+
+    CHECK_EQUAL(inside, true);
+    CHECK_EQUAL(outside, false);
+
+    // CHECK_EQUAL(bb.min.x, 639.f);
+    // CHECK_EQUAL(bb.min.y, 319.f);
+    // CHECK_EQUAL(bb.max.x, 641.f);
+    // CHECK_EQUAL(bb.max.y, 321.f);
+
+    return true;
+  }
+};
