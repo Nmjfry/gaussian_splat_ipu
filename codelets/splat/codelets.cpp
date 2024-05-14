@@ -49,7 +49,7 @@ public:
   poplar::Input<poplar::Vector<float>> downIn;
   poplar::Output<poplar::Vector<float>> downOut;
 
-  poplar::Input<poplar::Vector<float>> stored;
+  poplar::InOut<poplar::Vector<float>> stored;
 
   bool init;
 
@@ -147,20 +147,6 @@ public:
   // TODO: change to use templates instead of inheritance as virtual function insert 
   // vtable pointer so unpacking structs needs to be shifted by 1
   Gaussian3D unpackGaussian3D(poplar::InOut<poplar::Vector<float>> &buffer, unsigned idx, const glm::mat4& viewmatrix, const splat::Viewport& vp) {
-    // ivec4 mean;  // in world space
-    // ivec4 colour; // RGBA color space
-    // unsigned gid;
-    // ivec2 scale;
-    // ivec4 rot;  // local rotation of gaussian (real, i, j, k)
-    struct Gaussian3D g;
-    // memcpy(&g, &buffer[idx], sizeof(g));
-
-    // printf("mean %f %f %f %f\n", g.mean.x, g.mean.y, g.mean.z, g.mean.w);
-    // printf("colour %f %f %f %f\n", g.colour.x, g.colour.y, g.colour.z, g.colour.w);
-    // printf("gid %d\n", g.gid);
-    // printf("scale %f %f\n", g.scale.x, g.scale.y);
-    // printf("rot %f %f %f %f\n", g.rot.x, g.rot.y, g.rot.z, g.rot.w);
-
 
     ivec4 mean;
     memcpy(&mean, &buffer[idx], sizeof(mean));
@@ -173,17 +159,32 @@ public:
     ivec4 rot;
     memcpy(&rot, &buffer[idx+12], sizeof(rot));
 
-
-    // glm::mat2 vm2 = glm::mat2(viewmatrix);
-    // glm::mat2 cov2D;
-    // cov2D[0][0] = scale.x;
-    // cov2D[0][1] = scale.y;
-    // cov2D[1][0] = scale.y;
-    // cov2D[1][1] = scale.z;
-    // glm::mat2 newCov = vm2 * cov2D * glm::transpose(vm2);
-
+    struct Gaussian3D g;
     g.mean = mean;
-    g.scale = scale; //{cov2D[0][0], cov2D[0][1], cov2D[1][1]};
+    g.scale = scale; 
+    g.rot = rot;
+    g.colour = colour;
+    g.gid = gid;
+
+    return g;
+  }
+
+  Gaussian3D unpackGaussian3D(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx, const glm::mat4& viewmatrix, const splat::Viewport& vp) {
+
+    ivec4 mean;
+    memcpy(&mean, &buffer[idx], sizeof(mean));
+    ivec4 colour;
+    memcpy(&colour, &buffer[idx+4], sizeof(colour));
+    float gid;
+    memcpy(&gid, &buffer[idx+8], sizeof(gid));
+    ivec3 scale;
+    memcpy(&scale, &buffer[idx+9], sizeof(scale));
+    ivec4 rot;
+    memcpy(&rot, &buffer[idx+12], sizeof(rot));
+
+    struct Gaussian3D g;
+    g.mean = mean;
+    g.scale = scale; 
     g.rot = rot;
     g.colour = colour;
     g.gid = gid;
@@ -238,6 +239,12 @@ public:
     }
   }
 
+  void colourFb(const ivec4 &colour) {
+    for (auto i = 0; i < localFb.size(); i += 4) {
+      memcpy(&localFb[i], &colour, sizeof(colour));
+    }
+  }
+
   unsigned rasterise(const Gaussian2D &g, const Bounds2f& bb, const Bounds2f& tb) {
     auto tc = getTileColour();
     auto count = 0u;
@@ -247,7 +254,7 @@ public:
         if(g.inside(i,j)) {
           setPixel(px.x, px.y, g.colour);
         } else {
-          setPixel(px.x, px.y, tc);
+          // setPixel(px.x, px.y, tc);
         }
         count++;
       }
@@ -277,53 +284,89 @@ public:
         rasterise(g2D, bb, tb);
         send(g, dirs);
       } else {
+        // send in any direction once
+        sendOnce(g, dirs, direction::none);
         evict(bufferIn, i);
       }
     }
   }
 
-  // void readInput(poplar::Input<poplar::Vector<float>> &bufferIn,
-  //                                   const direction& recievedFrom,
-  //                                   const glm::mat4& viewmatrix,
-  //                                   const TiledFramebuffer& tfb,
-  //                                   const splat::Viewport& vp) {
+  void readInput(poplar::Input<poplar::Vector<float>> &bufferIn,
+                                    const direction& recievedFrom,
+                                    const glm::mat4& viewmatrix,
+                                    const TiledFramebuffer& tfb,
+                                    const splat::Viewport& vp) {
 
-  //   const auto tb = tfb.getTileBounds(tile_id[0]);
-  //   const auto fromTile = tfb.getNearbyTile(tile_id[0], recievedFrom);
-  //   const auto fromTb = tfb.getTileBounds(fromTile);
+    const auto tb = tfb.getTileBounds(tile_id[0]);
+    const auto fromTile = tfb.getNearbyTile(tile_id[0], recievedFrom);
+    const auto fromTb = tfb.getTileBounds(fromTile);
 
-  //   for (auto i = 0; i < bufferIn.size(); i+=16) {
-  //     Gaussian3D g = unpackGaussian3D(bufferIn, i, viewmatrix, vp);
-  //     if (g.gid == 0) {
-  //       break;
-  //     }
+    for (auto i = 0; i < bufferIn.size(); i+=16) {
+      Gaussian3D g = unpackGaussian3D(bufferIn, i, viewmatrix, vp);
+      if (g.gid == 0) {
+        break;
+      }
 
-  //     // see whether the gaussian is closer to its destination anchor
-  //     unsigned dest = tfb.pixCoordToTile(g.mean.x, g.mean.y);
-  //     const auto destTb = tfb.getTileBounds(dest);
-  //     const auto curDist = ivec2::manhattanDistance(destTb.min, tb.min); // min or centroid 
-  //     const auto prevDist = ivec2::manhattanDistance(destTb.min, fromTb.min); // min or centroid
-  //     bool closer = curDist < prevDist;
+      auto green = ivec4{0.0f, 0.3f, 0.0f, 0.0f};
+      colourFb(green);
 
-  //     // directions dirs;
-  //     // auto bb = g.getBoundingBox().clip(tb, dirs);
-  //     // rasterise(g, bb, tb);
+      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 1.0f, 1.0f);
+      glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
+      auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
+      Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
 
-  //     // if (tb.contains(g.mean)) { 
-  //     //   // is anchored then we will render it
-  //     //   // later in the main render loop 
-  //     //   insert(vertsIn, g);
-  //     // } else if (closer) {
-  //     //   // sendOnce and evict
-  //     //   sendOnce(g, dirs, recievedFrom);
-  //     // } else {
-  //     //   // if not anchored then we still try to render it
-  //     //   // but we only send it to the correct neighbour
-  //     //   rasterise(g, bb, tb);
-  //     // }
+      // see whether the gaussian is closer to its destination anchor
+      unsigned dest = tfb.pixCoordToTile(projMean.x, projMean.y);
+      const auto destTb = tfb.getTileBounds(dest);
+      const auto curDist = ivec2::manhattanDistance(destTb.min, tb.min); // min or centroid 
+      const auto prevDist = ivec2::manhattanDistance(destTb.min, fromTb.min); // min or centroid
+      bool closer = curDist < prevDist;
 
-  //   }
-  // } 
+      auto bb = g2D.GetBoundingBox();
+      directions dirs;
+      bb = bb.clip(tb, dirs);
+
+      if (tb.contains(g2D.mean)) { 
+        // is anchored then we will render and store 
+        insert(vertsIn, g);
+      } else if (bb.diagonal().length() < 1) {
+        // if not anchored and the visible region is 0
+        // then we send in a direction that we didn't recieved it from
+        sendOnce(g, dirs, recievedFrom);
+      } else {
+        rasterise(g2D, bb, tb);
+        insert(stored, g);
+      }
+    }
+  } 
+
+  void renderStored(poplar::InOut<poplar::Vector<float>> &bufferIn, const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
+    const auto tb = tfb.getTileBounds(tile_id[0]);
+    for (auto i = 0; i < bufferIn.size(); i+=16) {
+      Gaussian3D g = unpackGaussian3D(bufferIn, i, viewmatrix, vp);
+      if (g.gid <= 0) {
+        break;
+      }
+
+      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 1.0f, 1.0f);
+      glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
+      auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
+      Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
+
+      auto bb = g2D.GetBoundingBox();
+
+      directions dirs;
+      bb = bb.clip(tb, dirs);
+
+      if (tb.contains(g2D.mean)) { // is anchored 
+        insert(vertsIn, g);
+      } else if (bb.diagonal().length() < 1) {
+        evict(bufferIn, i);
+      } else {
+        // rasterise(g2D, bb, tb);
+      }
+    }
+  }
 
   bool compute(unsigned workerId) {
 
@@ -354,14 +397,14 @@ public:
     // Transpose because GLM storage order is column major:
     const auto viewmatrix = glm::transpose(glm::make_mat4(&matrix[0]));
 
+
+    readInput(rightIn, direction::right, viewmatrix, tfb, vp);
+    readInput(leftIn, direction::left, viewmatrix, tfb, vp);
+    readInput(upIn, direction::up, viewmatrix, tfb, vp);
+    readInput(downIn, direction::down, viewmatrix, tfb, vp);
+
     renderMain(vertsIn, viewmatrix, tfb, vp);
-
-    // readInput(rightIn, direction::right, viewmatrix, tfb, vp);
-    // readInput(leftIn, direction::left, viewmatrix, tfb, vp);
-    // readInput(upIn, direction::up, viewmatrix, tfb, vp);
-    // readInput(downIn, direction::down, viewmatrix, tfb, vp);
-
-    // renderStored(stored, viewmatrix, tfb, vp);
+    renderStored(stored, viewmatrix, tfb, vp);
 
    
     return true;

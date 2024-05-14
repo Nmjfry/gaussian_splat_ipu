@@ -82,7 +82,8 @@ enum direction {
   left,
   right,
   up,
-  down
+  down,
+  none
 };
 
 struct Bounds2f {
