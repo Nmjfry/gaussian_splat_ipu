@@ -221,15 +221,15 @@ public:
   }
 
   void sendOnce(Gaussian3D &g, directions possibleDirs, direction recievedDirection) {
-    if (recievedDirection != direction::right && possibleDirs.right) {
+    if (recievedDirection != direction::down && possibleDirs.down) {
+      insert(downOut, g);
+    } else if (recievedDirection != direction::right && possibleDirs.right) {
       insert(rightOut, g);
     } else if (recievedDirection != direction::left && possibleDirs.left) {
       insert(leftOut, g);
     } else if (recievedDirection != direction::up && possibleDirs.up) {
       insert(upOut, g);
-    } else if (recievedDirection != direction::down && possibleDirs.down) {
-      insert(downOut, g);
-    } 
+    }
   }
 
   void colourFb(const ivec4 &colour, unsigned workerId) {
@@ -281,6 +281,7 @@ public:
       bb = bb.clip(tb, dirs);
 
       if (tb.contains(g2D.mean)) { // is anchored 
+        insert(vertsIn, g);
         rasterise(g2D, bb, tb);
         send(g, dirs);
       } else {
@@ -329,12 +330,7 @@ public:
       if (tb.contains(g2D.mean)) { 
         // is anchored then we will render and store 
         insert(vertsIn, g);
-      } else if (bb.diagonal().length() < 1) {
-        // if not anchored and the visible region is 0
-        // then we send in a direction that we didn't recieved it from
-        sendOnce(g, dirs, recievedFrom);
       } else {
-        rasterise(g2D, bb, tb);
         insert(stored, g);
       }
     }
@@ -348,6 +344,9 @@ public:
         break;
       }
 
+      auto green = ivec4{0.0f, 0.3f, 0.0f, 0.0f};
+      colourFb(green);
+
       ivec3 cov2D = g.ComputeCov2D(viewmatrix, 1.0f, 1.0f);
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
       auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
@@ -358,13 +357,18 @@ public:
       directions dirs;
       bb = bb.clip(tb, dirs);
 
+
+      auto count = rasterise(g2D, bb, tb);
+      if (count > 0) {
+        send(g, dirs);
+      } else {
+        sendOnce(g, dirs, direction::none);
+        evict(bufferIn, i);
+      }
+
       if (tb.contains(g2D.mean)) { // is anchored 
         insert(vertsIn, g);
-      } else if (bb.diagonal().length() < 1) {
-        evict(bufferIn, i);
-      } else {
-        // rasterise(g2D, bb, tb);
-      }
+      } 
     }
   }
 
