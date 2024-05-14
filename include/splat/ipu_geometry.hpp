@@ -239,7 +239,7 @@ struct Gaussian2D {
   }
 
   // computes the eigenvalues and rotation from the 2D covariance matrix
-  glm::vec3 ComputeEigenvalues() const {
+  ivec3 ComputeEigenvalues() const {
     float det = cov2D.x * cov2D.z - cov2D.y * cov2D.y;
     float mid = .5f * (cov2D.x + cov2D.z);
     float lambda1 = mid + glm::sqrt(max(0.1f, mid * mid - det));
@@ -256,15 +256,14 @@ struct Gaussian2D {
   }
 
   Bounds2f GetBoundingBox() const {
-    float det = cov2D.x * cov2D.z - cov2D.y * cov2D.y;
-    if (det == 0) {
-      return Bounds2f({mean.x, mean.y}, {mean.x, mean.y});
-    }
-    float mid = .5f * (cov2D.x + cov2D.z);
-    float dif = glm::sqrt(max(0.1f, mid * mid - det));
-    float lambda1 = mid + dif;
-    float lambda2 = mid - dif;
-    return Bounds2f({mean.x - lambda1, mean.y - lambda2}, {mean.x + lambda1, mean.y + lambda2});
+    auto [e1, e2, theta] = ComputeEigenvalues();
+    auto c = glm::cos(theta);
+    auto s =  glm::sin(theta);
+    auto dd = (e1 / 2) * (e1 / 2);
+    auto DD = (e2 / 2) * (e2 / 2);
+    auto dxMax = glm::sqrt(dd * (c * c) + DD * (s * s));
+    auto dyMax = glm::sqrt(dd * (s * s) + DD * (c * c));
+    return Bounds2f({mean.x - dxMax, mean.y - dyMax}, {mean.x + dxMax, mean.y + dyMax});
   }
 
   // Pixel test to see if a pixel is inside the gaussian
