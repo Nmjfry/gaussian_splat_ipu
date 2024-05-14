@@ -193,8 +193,7 @@ int main(int argc, char** argv) {
     g.colour = {1.0f, 0.f, 0.f, 0.9f};
     g.mean = {centre.x, centre.y, centre.z, 1.f};
     g.gid = 9;
-    g.scale = {2.0f, 0.f, 4.0f};
-    cameraTranslation = glm::translate(glm::mat4(1.f), glm::vec3(state.X, state.Y, state.Z));
+    g.scale = {1.0f, 1.0f, 1.0f};
 
     if (state.device == "cpu") {
       // pvti::Tracepoint scoped(&traceChannel, "mvp_transform_cpu");
@@ -223,7 +222,8 @@ int main(int argc, char** argv) {
       // Update projection:
       projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
       // Update modelview:
-      dynamicView = cameraTranslation * modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(0.f, 0.f, 1.f));
+      dynamicView = modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(0.f, 0.f, 1.f));
+      dynamicView = glm::translate(dynamicView, glm::vec3(state.X / 2000.f, state.Y / 2000.f, state.Z / 2000.f));
     } else {
       // Only log these if not in interactive mode:
       ipu_utils::logger()->info("Splat time: {} points/sec: {}", splatTimeSecs, pts.size()/splatTimeSecs);
