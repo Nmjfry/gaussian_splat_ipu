@@ -220,15 +220,17 @@ public:
     }
   }
 
-  void sendOnce(Gaussian3D &g, directions possibleDirs, direction recievedDirection) {
-    if (recievedDirection != direction::down && possibleDirs.down) {
-      insert(downOut, g);
-    } else if (recievedDirection != direction::right && possibleDirs.right) {
+  void sendOnce(Gaussian3D &g, direction dir) {
+    if (dir == direction::right) {
       insert(rightOut, g);
-    } else if (recievedDirection != direction::left && possibleDirs.left) {
+    } else if (dir == direction::left) {
       insert(leftOut, g);
-    } else if (recievedDirection != direction::up && possibleDirs.up) {
+    } else if (dir == direction::up) {
       insert(upOut, g);
+    } else if (dir == direction::down) {
+      insert(downOut, g);
+    } else {
+      insert(vertsIn, g);
     }
   }
 
@@ -254,7 +256,7 @@ public:
         if(g.inside(i,j)) {
           setPixel(px.x, px.y, g.colour);
         } else {
-          // setPixel(px.x, px.y, tc);
+          setPixel(px.x, px.y, tc);
         }
         count++;
       }
@@ -262,32 +264,33 @@ public:
     return count;
   }
 
-  void renderMain(poplar::InOut<poplar::Vector<float>> &bufferIn, const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
+  void renderMain(const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
     const auto tb = tfb.getTileBounds(tile_id[0]);
-    for (auto i = 0; i < bufferIn.size(); i+=16) {
-      Gaussian3D g = unpackGaussian3D(bufferIn, i, viewmatrix, vp);
+    for (auto i = 0; i < vertsIn.size(); i+=16) {
+      Gaussian3D g = unpackGaussian3D(vertsIn, i, viewmatrix, vp);
       if (g.gid <= 0) {
         break;
       }
 
-      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 1.0f, 1.0f);
+      ivec3 cov2D = g.ComputeCov2D(viewmatrix, .5f, .5f);
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
       auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
 
-      auto bb = g2D.GetBoundingBox();
-
-      directions dirs;
-      bb = bb.clip(tb, dirs);
-
-      if (tb.contains(g2D.mean)) { // is anchored 
-        insert(vertsIn, g);
+      if (tb.contains(g2D.mean)) { 
+        // centre is on this tile so we are anchored
+        directions dirs;
+        auto bb = g2D.GetBoundingBox().clip(tb, dirs);
         rasterise(g2D, bb, tb);
-        send(g, dirs);
+
+        if (dirs.any()) { 
+          // start propogating from centre
+          send(g, dirs);
+        }
       } else {
-        // send in any direction once
-        sendOnce(g, dirs, direction::none);
-        evict(bufferIn, i);
+        auto direction = tfb.getBestDirection(tb.centroid(), g2D.mean);
+        sendOnce(g, direction);
+        evict(vertsIn, i);
       }
     }
   }
@@ -297,49 +300,91 @@ public:
                                     const glm::mat4& viewmatrix,
                                     const TiledFramebuffer& tfb,
                                     const splat::Viewport& vp) {
-
+    // Get the boundary of the current tile's framebuffer section
     const auto tb = tfb.getTileBounds(tile_id[0]);
-    const auto fromTile = tfb.getNearbyTile(tile_id[0], recievedFrom);
-    const auto fromTb = tfb.getTileBounds(fromTile);
 
+    // Iterate over the input channel and unpack the Gaussian3D structs
     for (auto i = 0; i < bufferIn.size(); i+=16) {
       Gaussian3D g = unpackGaussian3D(bufferIn, i, viewmatrix, vp);
       if (g.gid == 0) {
+        // gid 0 if the place in the buffer is not occupied,
+        // since the channels are filled from the front we can break
+        // when we hit an empty slot
         break;
       }
 
+      // if we recieved a gaussian then we colour the framebuffer green
       auto green = ivec4{0.0f, 0.3f, 0.0f, 0.0f};
       colourFb(green);
 
-      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 1.0f, 1.0f);
+      // project the 3D gaussian into 2D using EWA splatting algorithm
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
       auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
+      ivec3 cov2D = g.ComputeCov2D(viewmatrix, .5f, .5f);
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
 
-      // see whether the gaussian is closer to its destination anchor
-      unsigned dest = tfb.pixCoordToTile(projMean.x, projMean.y);
-      const auto destTb = tfb.getTileBounds(dest);
-      const auto curDist = ivec2::manhattanDistance(destTb.min, tb.min); // min or centroid 
-      const auto prevDist = ivec2::manhattanDistance(destTb.min, fromTb.min); // min or centroid
-      bool closer = curDist < prevDist;
-
-      auto bb = g2D.GetBoundingBox();
-      directions dirs;
-      bb = bb.clip(tb, dirs);
-
       if (tb.contains(g2D.mean)) { 
-        // is anchored then we will render and store 
+        // if gaussian is anchored then we will store
+        // and render in the main loop 
         insert(vertsIn, g);
-      } else {
-        insert(stored, g);
+        continue;
+      } 
+      
+      auto prevTile = tfb.getNearbyTile(tile_id[0], recievedFrom);
+      auto curDist = tfb.manhattanDistance(tb.centroid(), g2D.mean);
+      auto prevDist = tfb.manhattanDistance(tfb.getTileBounds(prevTile).centroid(), g2D.mean);
+
+      // if this tile is closer to anchor then we keep sending it towards anchor.
+      if (curDist < prevDist) {
+        auto direction = tfb.getBestDirection(tb.centroid(), g2D.mean);
+        if (direction != recievedFrom) {  // can maybe lose it here
+          sendOnce(g, direction);
+        } else {
+          // store it for an extra exchange cycle
+          insert(stored, g);
+        }
+        continue;
+      }
+      
+      // if its further then we have recieved it from the anchor, 
+      // so will propogate outwards one step according to the protocol 
+      if (curDist > prevDist) {
+        directions clippedDirs;
+        auto clippedBB = g2D.GetBoundingBox().clip(tb, clippedDirs);
+
+        if (recievedFrom == direction::right && clippedDirs.left) {
+          sendOnce(g, direction::left);
+          insert(stored, g);
+          continue;
+        }
+
+        if (recievedFrom == direction::left && clippedDirs.right) {
+          sendOnce(g, direction::right);
+          insert(stored, g);
+          continue;
+        }
+
+        if (recievedFrom == direction::up && clippedDirs.down) {
+          sendOnce(g, direction::down);
+          insert(stored, g);
+          continue;
+        }
+
+        if (recievedFrom == direction::down && clippedDirs.up) {
+          sendOnce(g, direction::up);
+          insert(stored, g);
+          continue;
+        }
+
       }
     }
   } 
 
-  void renderStored(poplar::InOut<poplar::Vector<float>> &bufferIn, const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
+  void renderStored(const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
     const auto tb = tfb.getTileBounds(tile_id[0]);
-    for (auto i = 0; i < bufferIn.size(); i+=16) {
-      Gaussian3D g = unpackGaussian3D(bufferIn, i, viewmatrix, vp);
+
+    for (auto i = 0; i < stored.size(); i+=16) {
+      Gaussian3D g = unpackGaussian3D(stored, i, viewmatrix, vp);
       if (g.gid <= 0) {
         break;
       }
@@ -347,28 +392,25 @@ public:
       auto green = ivec4{0.0f, 0.3f, 0.0f, 0.0f};
       colourFb(green);
 
-      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 1.0f, 1.0f);
+      ivec3 cov2D = g.ComputeCov2D(viewmatrix, .5f, .5f);
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
       auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
 
-      auto bb = g2D.GetBoundingBox();
-
-      directions dirs;
-      bb = bb.clip(tb, dirs);
-
-
-      auto count = rasterise(g2D, bb, tb);
-      if (count > 0) {
-        send(g, dirs);
-      } else {
-        sendOnce(g, dirs, direction::none);
-        evict(bufferIn, i);
-      }
-
-      if (tb.contains(g2D.mean)) { // is anchored 
+      if (tb.contains(g2D.mean)) { 
+        // if gaussian is anchored then we will store
+        // and render in the main loop 
         insert(vertsIn, g);
+        evict(stored, i);
+        continue;
       } 
+
+      auto bb = g2D.GetBoundingBox().clip(tb);
+      auto count = rasterise(g2D, bb, tb);
+
+      if (count < 1) {
+        evict(stored, i);
+      }
     }
   }
 
@@ -377,22 +419,21 @@ public:
     // zero the framebuffer and clear the send buffers
     colourFb({0.0f, 0.0f, 0.0f, 0.0f}, workerId);
 
+    const unsigned GAUSSIAN3D_SIZE = 16;
+    const auto startIndex = GAUSSIAN3D_SIZE * workerId;
+
     //clear all of the out buffers:
-    for (auto i = 0; i < rightOut.size(); i+=16) {
+    for (auto i = startIndex; i < rightOut.size(); i+=GAUSSIAN3D_SIZE * numWorkers()) {
       evict(rightOut, i);
     }
-    for (auto i = 0; i < leftOut.size(); i+=16) {
+    for (auto i = startIndex; i < leftOut.size(); i+=GAUSSIAN3D_SIZE * numWorkers()) {
       evict(leftOut, i);
     }
-    for (auto i = 0; i < upOut.size(); i+=16) {
+    for (auto i = startIndex; i < upOut.size(); i+=GAUSSIAN3D_SIZE * numWorkers()) {
       evict(upOut, i);
     }
-    for (auto i = 0; i < downOut.size(); i+=16) {
+    for (auto i = startIndex; i < downOut.size(); i+=GAUSSIAN3D_SIZE * numWorkers()) {
       evict(downOut, i);
-    }
-  
-    if (workerId != 0) {
-      return true;
     }
 
     // construct mapping from tile to framebuffer
@@ -401,14 +442,14 @@ public:
     // Transpose because GLM storage order is column major:
     const auto viewmatrix = glm::transpose(glm::make_mat4(&matrix[0]));
 
+    renderMain(viewmatrix, tfb, vp);
+    renderStored(viewmatrix, tfb, vp);
 
     readInput(rightIn, direction::right, viewmatrix, tfb, vp);
     readInput(leftIn, direction::left, viewmatrix, tfb, vp);
     readInput(upIn, direction::up, viewmatrix, tfb, vp);
     readInput(downIn, direction::down, viewmatrix, tfb, vp);
 
-    renderMain(vertsIn, viewmatrix, tfb, vp);
-    renderStored(stored, viewmatrix, tfb, vp);
 
    
     return true;

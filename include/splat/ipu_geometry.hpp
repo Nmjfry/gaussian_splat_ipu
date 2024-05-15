@@ -42,9 +42,6 @@ struct ivec2 {
   float length() const {
     return sqrt(x * x + y * y);
   }
-  static float manhattanDistance(ivec2 const &a, ivec2 const &b) {
-    return abs(a.x - b.x) + abs(a.y - b.y);
-  }
 };
 
 typedef struct ivec2 ivec2;
@@ -76,6 +73,9 @@ typedef struct directions {
     bool left;
     bool keep;
     static const int NUM_DIRS = 4;
+    bool any() const {
+      return up || right || down || left;
+    }
 } directions;
 
 enum direction {

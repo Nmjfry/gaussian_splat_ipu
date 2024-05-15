@@ -85,6 +85,21 @@ public:
     }
   }
 
+  static float manhattanDistance(ivec2 const &a, ivec2 const &b) {
+    return abs(a.x - b.x) + abs(a.y - b.y);
+  }
+
+  direction getBestDirection(ivec2 const &src, ivec2 const &dst) const {
+    auto dist = manhattanDistance(src, dst);
+    if (dist == 0) {
+      return direction::none;
+    }
+    if (src.x == dst.x) {
+      return src.y < dst.y ? direction::down : direction::up;
+    }
+    return src.x < dst.x ? direction::right : direction::left;
+  }
+
   bool isValidTile(unsigned tid) const {
     return tid < numTiles;
   }
