@@ -288,7 +288,11 @@ public:
           send(g, dirs);
         }
       } else {
-        auto direction = tfb.getBestDirection(tb.centroid(), g2D.mean);
+        // if this tile owned the centre at some point (since it is in vertsIn)
+        // then it is responsible for sending on. 
+        auto dstTile = tfb.pixCoordToTile(g2D.mean.x, g2D.mean.y);
+        auto dst = tfb.getTileBounds(dstTile).centroid();
+        auto direction = tfb.getBestDirection(tb.centroid(), dst);
         sendOnce(g, direction);
         evict(vertsIn, i);
       }
@@ -336,14 +340,16 @@ public:
 
       // if this tile is closer to anchor then we keep sending it towards anchor.
       if (curDist < prevDist) {
-        auto direction = tfb.getBestDirection(tb.centroid(), g2D.mean);
-        if (direction != recievedFrom) {  // can maybe lose it here
-          sendOnce(g, direction);
-        } else {
-          // store it for an extra exchange cycle
-          insert(stored, g);
-        }
+        insert(vertsIn, g);
         continue;
+        // auto direction = tfb.getBestDirection(tb.centroid(), g2D.mean);
+        // if (direction != recievedFrom) {  // can maybe lose it here
+        //   sendOnce(g, direction);
+        // } else {
+        //   // store it for an extra exchange cycle
+        //   insert(stored, g);
+        // }
+        // continue;
       }
       
       // if its further then we have recieved it from the anchor, 
