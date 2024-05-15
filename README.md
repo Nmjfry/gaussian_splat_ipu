@@ -1,6 +1,6 @@
 # 3D Gaussian Splatting on Graphcore IPUs
 
-Experimental implementation of an alternatice to neural radiance fields: [3D Gaussian Splatting for Real-Time Radiance Field Rendering](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting) B. Kerbl and G. Kopanas, T. Leimk{\"u}hler and G. Drettakis, ACM Transactions on Graphics, July 2023.
+Experimental implementation of an alternative to neural radiance fields: [3D Gaussian Splatting for Real-Time Radiance Field Rendering](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting) B. Kerbl and G. Kopanas, T. Leimk{\"u}hler and G. Drettakis, ACM Transactions on Graphics, July 2023.
 
 ## Which bits are a good fit for IPU?:
 - Should be able to perform efficient Gaussian transformations and splats using matrix and convolution unit.
