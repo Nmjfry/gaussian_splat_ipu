@@ -299,7 +299,7 @@ public:
 
             // if we recieved a gaussian then we colour the framebuffer green
 
-      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 1.f, 1.f);
+      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 640.f, 360.f);
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
       auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
@@ -388,7 +388,7 @@ public:
       // project the 3D gaussian into 2D using EWA splatting algorithm
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
       auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
-      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 1.f, 1.f);
+      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 640.f, 360.f);
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
 
       if (tb.contains(g2D.mean)) {
@@ -438,7 +438,7 @@ public:
       auto green = ivec4{0.0f, 0.3f, 0.0f, 0.0f};
       colourFb(green);
 
-      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 1.f, 1.f);
+      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 640.f, 360.f);
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
       auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
