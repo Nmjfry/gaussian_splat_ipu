@@ -255,6 +255,15 @@ public:
     }
   }
 
+  void addBG(const ivec4 &colour) {
+    for (auto i = 0; i < localFb.size(); i += 4) {
+      ivec4 pixel;
+      memcpy(&pixel, &localFb[i], sizeof(pixel));
+      pixel = pixel + colour;
+      memcpy(&localFb[i], &pixel, sizeof(pixel));
+    }
+  }
+
   void colourFb(const ivec4 &colour) {
     for (auto i = 0; i < localFb.size(); i += 4) {
       memcpy(&localFb[i], &colour, sizeof(colour));
@@ -289,8 +298,6 @@ public:
       }
 
             // if we recieved a gaussian then we colour the framebuffer green
-      auto green = ivec4{0.0f, 0.3f, 0.0f, 0.0f};
-      colourFb(green);
 
       ivec3 cov2D = g.ComputeCov2D(viewmatrix, 1.f, 1.f);
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
@@ -298,8 +305,10 @@ public:
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
 
       if (tb.contains(g2D.mean)) {
-        auto bb = g2D.GetBoundingBox().clip(tb);
+        directions dirs;
+        auto bb = g2D.GetBoundingBox().clip(tb, dirs);
         rasterise(g2D, bb, tb);
+        send(g, dirs);
         continue;
       } 
 
@@ -319,6 +328,7 @@ public:
                                     const splat::Viewport& vp) {
     // Get the boundary of the current tile's framebuffer section
     const auto tb = tfb.getTileBounds(tile_id[0]);
+    const auto tbPrev = tfb.getTileBounds(tfb.getNearbyTile(tile_id[0], recievedFrom));
 
     // Iterate over the input channel and unpack the Gaussian3D structs
     for (auto i = 0; i < bufferIn.size(); i+=16) {
@@ -332,7 +342,7 @@ public:
 
       // if we recieved a gaussian then we colour the framebuffer green
       auto green = ivec4{0.0f, 0.3f, 0.0f, 0.0f};
-      colourFb(green);
+      addBG(green);
 
       // project the 3D gaussian into 2D using EWA splatting algorithm
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
@@ -341,15 +351,57 @@ public:
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
 
       if (tb.contains(g2D.mean)) {
+        // anchor arrived so we insert and let
+        // render main handle the rest
         insert(vertsIn, g);
         continue;
       } 
 
-      auto dstTile = tfb.pixCoordToTile(g2D.mean.y, g2D.mean.x);
-      auto dstCentre = tfb.getTileBounds(dstTile).centroid();
-      auto direction = tfb.getBestDirection(tb.centroid(), dstCentre);
+      auto bb = g2D.GetBoundingBox().clip(tb);
+      auto c = rasterise(g2D, bb, tb);
 
+      auto dstTile = tfb.pixCoordToTile(g2D.mean.y, g2D.mean.x);
+      ivec2 dstCentre = tfb.getTileBounds(dstTile).centroid();
+      ivec2 prevCentre = tbPrev.centroid();
+      ivec2 curCentre = tb.centroid();
+
+      auto prevDist = tfb.manhattanDistance(prevCentre, dstCentre);
+      auto curDist = tfb.manhattanDistance(curCentre, dstCentre);
+      auto direction = tfb.getBestDirection(curCentre, dstCentre);
       sendOnce(g, direction);
+
+      continue;
+
+
+
+      // the gaussian is being propagated away from the anchor,
+      // we need to render and pass it on until the extent is fully rendered.
+
+      directions clippedDirs;
+      auto clippedBB = g2D.GetBoundingBox().clip(tb, clippedDirs);
+      auto count = rasterise(g2D, clippedBB, tb);
+
+      if (count > 0) {
+        if (recievedFrom == direction::right && clippedDirs.left) {
+          sendOnce(g, direction::left);
+          continue;
+        }
+
+        if (recievedFrom == direction::left && clippedDirs.right) {
+          sendOnce(g, direction::right);
+          continue;
+        }
+
+        if (recievedFrom == direction::up && clippedDirs.down) {
+          sendOnce(g, direction::down);
+          continue;
+        }
+
+        if (recievedFrom == direction::down && clippedDirs.up) {
+          sendOnce(g, direction::up);
+          continue;
+        }
+      }
     }
   } 
 

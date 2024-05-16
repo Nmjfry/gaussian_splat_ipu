@@ -117,46 +117,34 @@ struct Bounds2f {
   //   max.y = max(max.y, v.y);
   // }
 
-  Bounds2f clip(const Bounds2f& fixedBound) const {
+  Bounds2f clip(const Bounds2f& fixedBound, directions& dirs) const {
     ivec2 topleft = min;
     ivec2 bottomright = max;
-    if (topleft.x < fixedBound.min.x) {
+    dirs.left = topleft.x < fixedBound.min.x;
+    dirs.up = topleft.y < fixedBound.min.y;
+    dirs.right = bottomright.x >= fixedBound.max.x;
+    dirs.down = bottomright.y >= fixedBound.max.y;
+
+    if (dirs.left) {
       topleft.x = fixedBound.min.x;
     }
-    if (topleft.y < fixedBound.min.y) {
+    if (dirs.up) {
       topleft.y = fixedBound.min.y;
     }
-    if (bottomright.x >= fixedBound.max.x) {
+    if (dirs.right) {
       bottomright.x = fixedBound.max.x;
     }
-    if (bottomright.y >= fixedBound.max.y) {
+    if (dirs.down) {
       bottomright.y = fixedBound.max.y;
     }
     Bounds2f clipped = {topleft, bottomright};
     return clipped;
   }
 
-  Bounds2f clip(const Bounds2f& fixedBound, directions& dirs) const {
-    ivec2 topleft = min;
-    ivec2 bottomright = max;
-    if (topleft.x < fixedBound.min.x) {
-      topleft.x = fixedBound.min.x;
-      dirs.left = true;
-    }
-    if (topleft.y < fixedBound.min.y) {
-      topleft.y = fixedBound.min.y;
-      dirs.up = true;
-    }
-    if (bottomright.x >= fixedBound.max.x) {
-      bottomright.x = fixedBound.max.x;
-      dirs.right = true;
-    }
-    if (bottomright.y >= fixedBound.max.y) {
-      bottomright.y = fixedBound.max.y;
-      dirs.down = true;
-    }
-    Bounds2f clipped = {topleft, bottomright};
-    return clipped;
+
+  Bounds2f clip(const Bounds2f& fixedBound) const {
+    directions dirs;
+    return clip(fixedBound, dirs);
   }
 
   bool contains(const ivec2& v) const {
