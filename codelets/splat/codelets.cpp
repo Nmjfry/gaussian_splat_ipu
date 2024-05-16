@@ -413,6 +413,16 @@ public:
           sendOnce(g, direction::up);
           continue;
         }
+
+        if (clippedDirs.any()) {
+          if (clippedDirs.up) {
+            sendOnce(g, direction::up);
+          }
+          if (clippedDirs.down) {
+            sendOnce(g, direction::down);
+          }
+          continue;
+        }
       // }
 
       // guard against losing a gaussian
