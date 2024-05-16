@@ -223,14 +223,28 @@ public:
   void sendOnce(Gaussian3D &g, direction dir) {
     if (dir == direction::right) {
       insert(rightOut, g);
+    } else if (dir == direction::down) {
+      insert(downOut, g);
     } else if (dir == direction::left) {
       insert(leftOut, g);
     } else if (dir == direction::up) {
       insert(upOut, g);
-    } else if (dir == direction::down) {
-      insert(downOut, g);
     } else {
       insert(vertsIn, g);
+    }
+  }
+
+  void sendOnce(Gaussian3D &sq, directions possibleDirs, direction recievedDirection) {
+    if (recievedDirection != direction::right && possibleDirs.right) {
+      insert(rightOut, sq);
+    } else if (recievedDirection != direction::left && possibleDirs.left) {
+      insert(leftOut, sq);
+    } else if (recievedDirection != direction::up && possibleDirs.up) {
+      insert(upOut, sq);
+    } else if (recievedDirection != direction::down && possibleDirs.down) {
+      insert(downOut, sq);
+    } else {
+      insert(vertsIn, sq);
     }
   }
 
@@ -266,36 +280,35 @@ public:
 
   void renderMain(const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
     const auto tb = tfb.getTileBounds(tile_id[0]);
+    const auto centre = tb.centroid();
+
     for (auto i = 0; i < vertsIn.size(); i+=16) {
       Gaussian3D g = unpackGaussian3D(vertsIn, i, viewmatrix, vp);
       if (g.gid <= 0) {
         break;
       }
 
-      ivec3 cov2D = g.ComputeCov2D(viewmatrix, .5f, .5f);
+            // if we recieved a gaussian then we colour the framebuffer green
+      auto green = ivec4{0.0f, 0.3f, 0.0f, 0.0f};
+      colourFb(green);
+
+      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 1.f, 1.f);
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
       auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
 
-      if (tb.contains(g2D.mean)) { 
-        // centre is on this tile so we are anchored
-        directions dirs;
-        auto bb = g2D.GetBoundingBox().clip(tb, dirs);
+      if (tb.contains(g2D.mean)) {
+        auto bb = g2D.GetBoundingBox().clip(tb);
         rasterise(g2D, bb, tb);
+        continue;
+      } 
 
-        if (dirs.any()) { 
-          // start propogating from centre
-          send(g, dirs);
-        }
-      } else {
-        // if this tile owned the centre at some point (since it is in vertsIn)
-        // then it is responsible for sending on. 
-        auto dstTile = tfb.pixCoordToTile(g2D.mean.x, g2D.mean.y);
-        auto dst = tfb.getTileBounds(dstTile).centroid();
-        auto direction = tfb.getBestDirection(tb.centroid(), dst);
-        sendOnce(g, direction);
-        evict(vertsIn, i);
-      }
+      auto dstTile = tfb.pixCoordToTile(g2D.mean.y, g2D.mean.x);
+      auto dstCentre = tfb.getTileBounds(dstTile).centroid();
+      auto direction = tfb.getBestDirection(tb.centroid(), dstCentre);
+
+      evict(vertsIn, i);
+      sendOnce(g, direction);
     }
   }
 
@@ -324,65 +337,19 @@ public:
       // project the 3D gaussian into 2D using EWA splatting algorithm
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
       auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
-      ivec3 cov2D = g.ComputeCov2D(viewmatrix, .5f, .5f);
+      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 1.f, 1.f);
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
 
-      if (tb.contains(g2D.mean)) { 
-        // if gaussian is anchored then we will store
-        // and render in the main loop 
+      if (tb.contains(g2D.mean)) {
         insert(vertsIn, g);
         continue;
       } 
-      
-      auto prevTile = tfb.getNearbyTile(tile_id[0], recievedFrom);
-      auto curDist = tfb.manhattanDistance(tb.centroid(), g2D.mean);
-      auto prevDist = tfb.manhattanDistance(tfb.getTileBounds(prevTile).centroid(), g2D.mean);
 
-      // if this tile is closer to anchor then we keep sending it towards anchor.
-      if (curDist < prevDist) {
-        insert(vertsIn, g);
-        continue;
-        // auto direction = tfb.getBestDirection(tb.centroid(), g2D.mean);
-        // if (direction != recievedFrom) {  // can maybe lose it here
-        //   sendOnce(g, direction);
-        // } else {
-        //   // store it for an extra exchange cycle
-        //   insert(stored, g);
-        // }
-        // continue;
-      }
-      
-      // if its further then we have recieved it from the anchor, 
-      // so will propogate outwards one step according to the protocol 
-      if (curDist > prevDist) {
-        directions clippedDirs;
-        auto clippedBB = g2D.GetBoundingBox().clip(tb, clippedDirs);
+      auto dstTile = tfb.pixCoordToTile(g2D.mean.y, g2D.mean.x);
+      auto dstCentre = tfb.getTileBounds(dstTile).centroid();
+      auto direction = tfb.getBestDirection(tb.centroid(), dstCentre);
 
-        if (recievedFrom == direction::right && clippedDirs.left) {
-          sendOnce(g, direction::left);
-          insert(stored, g);
-          continue;
-        }
-
-        if (recievedFrom == direction::left && clippedDirs.right) {
-          sendOnce(g, direction::right);
-          insert(stored, g);
-          continue;
-        }
-
-        if (recievedFrom == direction::up && clippedDirs.down) {
-          sendOnce(g, direction::down);
-          insert(stored, g);
-          continue;
-        }
-
-        if (recievedFrom == direction::down && clippedDirs.up) {
-          sendOnce(g, direction::up);
-          insert(stored, g);
-          continue;
-        }
-
-      }
+      sendOnce(g, direction);
     }
   } 
 
@@ -398,7 +365,7 @@ public:
       auto green = ivec4{0.0f, 0.3f, 0.0f, 0.0f};
       colourFb(green);
 
-      ivec3 cov2D = g.ComputeCov2D(viewmatrix, .5f, .5f);
+      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 1.f, 1.f);
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
       auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
@@ -448,8 +415,12 @@ public:
     // Transpose because GLM storage order is column major:
     const auto viewmatrix = glm::transpose(glm::make_mat4(&matrix[0]));
 
+    // if (tile_id[0] == 669) {
+    //   // 
+    // }
+
     renderMain(viewmatrix, tfb, vp);
-    renderStored(viewmatrix, tfb, vp);
+    // // renderStored(viewmatrix, tfb, vp);
 
     readInput(rightIn, direction::right, viewmatrix, tfb, vp);
     readInput(leftIn, direction::left, viewmatrix, tfb, vp);

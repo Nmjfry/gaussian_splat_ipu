@@ -94,10 +94,19 @@ public:
     if (dist == 0) {
       return direction::none;
     }
-    if (src.x == dst.x) {
-      return src.y < dst.y ? direction::down : direction::up;
+    if (src.y < dst.y) {
+      return direction::down;
     }
-    return src.x < dst.x ? direction::right : direction::left;
+    if (src.y > dst.y) {
+      return direction::up;
+    }
+    if (src.x < dst.x) {
+      return direction::right;
+    }
+    if (src.x > dst.x) {
+      return direction::left;
+    }
+    return direction::none;
   }
 
   bool isValidTile(unsigned tid) const {
