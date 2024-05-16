@@ -90,7 +90,7 @@ public:
   //   return (p.inside(tb.min.x, tb.min.y) || p.inside(tb.min.x, tb.max.y) || p.inside(tb.max.x, tb.min.y) || p.inside(tb.max.x, tb.max.y));
   // }
 
-  bool insertAt(poplar::Vector<float> &buffer, unsigned idx, Gaussian3D& g) {
+  bool insertAt(poplar::Vector<float> &buffer, unsigned idx, const Gaussian3D& g) {
     if (idx + 16 > buffer.size()) {
       return false;
     }
@@ -102,7 +102,7 @@ public:
     return true;
   }
 
-  bool insertAt(poplar::InOut<poplar::Vector<float>> &buffer, unsigned idx, Gaussian3D& g) {
+  bool insertAt(poplar::InOut<poplar::Vector<float>> &buffer, unsigned idx, const Gaussian3D& g) {
     if (idx + 16 > buffer.size()) {
       return false;
     }
@@ -114,7 +114,7 @@ public:
     return true;
   }
 
-  bool insert(poplar::InOut<poplar::Vector<float>> &buffer, Gaussian3D& g) {
+  bool insert(poplar::InOut<poplar::Vector<float>> &buffer, const Gaussian3D& g) {
     unsigned idx = buffer.size();
     for (auto i = 0; i < buffer.size(); i+=16) {
       float gid;
@@ -129,7 +129,7 @@ public:
     return insertAt(buffer, idx, g);
   }
 
-  bool insert(poplar::Vector<float> &buffer, Gaussian3D& g) {
+  bool insert(poplar::Vector<float> &buffer, const Gaussian3D& g) {
     unsigned idx = buffer.size();
     for (auto i = 0; i < buffer.size(); i+=16) {
       float gid;
@@ -220,7 +220,7 @@ public:
     }
   }
 
-  void sendOnce(Gaussian3D &g, direction dir) {
+  void sendOnce(const Gaussian3D &g, direction dir) {
     if (dir == direction::right) {
       insert(rightOut, g);
     } else if (dir == direction::down) {
@@ -234,7 +234,7 @@ public:
     }
   }
 
-  void sendOnce(Gaussian3D &sq, directions possibleDirs, direction recievedDirection) {
+  void sendOnce(const Gaussian3D &sq, directions possibleDirs, direction recievedDirection) {
     if (recievedDirection != direction::right && possibleDirs.right) {
       insert(rightOut, sq);
     } else if (recievedDirection != direction::left && possibleDirs.left) {
@@ -279,7 +279,7 @@ public:
         if(g.inside(i,j)) {
           setPixel(px.x, px.y, g.colour);
         } else {
-          setPixel(px.x, px.y, tc);
+          // setPixel(px.x, px.y, tc);
         }
         count++;
       }
@@ -321,6 +321,51 @@ public:
     }
   }
 
+  bool gaussianProtocol(const Gaussian3D& g, const directions& sendTo, const direction& recievedFrom) {
+    if (recievedFrom == direction::right && sendTo.left) {
+      sendOnce(g, direction::left);
+      if (sendTo.down) {
+        sendOnce(g, direction::down);
+      }
+      if (sendTo.up) {
+        sendOnce(g, direction::up);
+      }
+      return true;
+    }
+
+    if (recievedFrom == direction::left && sendTo.right) {
+      sendOnce(g, direction::right);
+      if (sendTo.down) {
+        sendOnce(g, direction::down);
+      }
+      if (sendTo.up) {
+        sendOnce(g, direction::up);
+      }
+      return true;
+    }
+
+    if (recievedFrom == direction::up && sendTo.down) {
+      sendOnce(g, direction::down);
+      return true;
+    }
+
+    if (recievedFrom == direction::down && sendTo.up) {
+      sendOnce(g, direction::up);
+      return true;
+    }
+
+    if (sendTo.any()) {
+      if (sendTo.up) {
+        sendOnce(g, direction::up);
+      }
+      if (sendTo.down) {
+        sendOnce(g, direction::down);
+      }
+      return true;
+    }
+    return false;
+  }
+
   void readInput(poplar::Input<poplar::Vector<float>> &bufferIn,
                                     const direction& recievedFrom,
                                     const glm::mat4& viewmatrix,
@@ -340,10 +385,6 @@ public:
         break;
       }
 
-      // if we recieved a gaussian then we colour the framebuffer green
-      // auto green = ivec4{0.0f, 0.3f, 0.0f, 0.0f};
-      // addBG(green);
-
       // project the 3D gaussian into 2D using EWA splatting algorithm
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
       auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
@@ -357,7 +398,6 @@ public:
         continue;
       } 
 
-
       auto dstTile = tfb.pixCoordToTile(g2D.mean.y, g2D.mean.x);
       ivec2 dstCentre = tfb.getTileBounds(dstTile).centroid();
       ivec2 prevCentre = tbPrev.centroid();
@@ -366,68 +406,23 @@ public:
       auto prevDist = tfb.manhattanDistance(prevCentre, dstCentre);
       auto curDist = tfb.manhattanDistance(curCentre, dstCentre);
 
-      auto direction = tfb.getBestDirection(curCentre, dstCentre);
-
       if (curDist < prevDist) {
+        auto direction = tfb.getBestDirection(curCentre, dstCentre);
         sendOnce(g, direction);
         continue;
       }
 
-
       // the gaussian is being propagated away from the anchor,
       // we need to render and pass it on until the extent is fully rendered.
-
-      directions clippedDirs;
-      auto clippedBB = g2D.GetBoundingBox().clip(tb, clippedDirs);
+      directions sendTo;
+      auto clippedBB = g2D.GetBoundingBox().clip(tb, sendTo);
       auto count = rasterise(g2D, clippedBB, tb);
 
-      // if (count > 0) {
-        if (recievedFrom == direction::right && clippedDirs.left) {
-          sendOnce(g, direction::left);
-          if (clippedDirs.down) {
-            sendOnce(g, direction::down);
-          }
-          if (clippedDirs.up) {
-            sendOnce(g, direction::up);
-          }
-          continue;
-        }
-
-        if (recievedFrom == direction::left && clippedDirs.right) {
-          sendOnce(g, direction::right);
-          if (clippedDirs.down) {
-            sendOnce(g, direction::down);
-          }
-          if (clippedDirs.up) {
-            sendOnce(g, direction::up);
-          }
-          continue;
-        }
-
-        if (recievedFrom == direction::up && clippedDirs.down) {
-          sendOnce(g, direction::down);
-          continue;
-        }
-
-        if (recievedFrom == direction::down && clippedDirs.up) {
-          sendOnce(g, direction::up);
-          continue;
-        }
-
-        if (clippedDirs.any()) {
-          if (clippedDirs.up) {
-            sendOnce(g, direction::up);
-          }
-          if (clippedDirs.down) {
-            sendOnce(g, direction::down);
-          }
-          continue;
-        }
-      // }
-
-      // guard against losing a gaussian
-      // should only get here in very specific cases
-      insert(vertsIn, g);
+      if (!gaussianProtocol(g, sendTo, recievedFrom)) {
+        // guard against losing a gaussian
+        // should only get here in very specific cases
+        insert(vertsIn, g);
+      }
     }
   } 
 
