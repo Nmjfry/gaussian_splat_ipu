@@ -341,8 +341,8 @@ public:
       }
 
       // if we recieved a gaussian then we colour the framebuffer green
-      auto green = ivec4{0.0f, 0.3f, 0.0f, 0.0f};
-      addBG(green);
+      // auto green = ivec4{0.0f, 0.3f, 0.0f, 0.0f};
+      // addBG(green);
 
       // project the 3D gaussian into 2D using EWA splatting algorithm
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
@@ -357,8 +357,6 @@ public:
         continue;
       } 
 
-      auto bb = g2D.GetBoundingBox().clip(tb);
-      auto c = rasterise(g2D, bb, tb);
 
       auto dstTile = tfb.pixCoordToTile(g2D.mean.y, g2D.mean.x);
       ivec2 dstCentre = tfb.getTileBounds(dstTile).centroid();
@@ -367,11 +365,13 @@ public:
 
       auto prevDist = tfb.manhattanDistance(prevCentre, dstCentre);
       auto curDist = tfb.manhattanDistance(curCentre, dstCentre);
+
       auto direction = tfb.getBestDirection(curCentre, dstCentre);
-      sendOnce(g, direction);
 
-      continue;
-
+      if (curDist < prevDist) {
+        sendOnce(g, direction);
+        continue;
+      }
 
 
       // the gaussian is being propagated away from the anchor,
@@ -381,14 +381,26 @@ public:
       auto clippedBB = g2D.GetBoundingBox().clip(tb, clippedDirs);
       auto count = rasterise(g2D, clippedBB, tb);
 
-      if (count > 0) {
+      // if (count > 0) {
         if (recievedFrom == direction::right && clippedDirs.left) {
           sendOnce(g, direction::left);
+          if (clippedDirs.down) {
+            sendOnce(g, direction::down);
+          }
+          if (clippedDirs.up) {
+            sendOnce(g, direction::up);
+          }
           continue;
         }
 
         if (recievedFrom == direction::left && clippedDirs.right) {
           sendOnce(g, direction::right);
+          if (clippedDirs.down) {
+            sendOnce(g, direction::down);
+          }
+          if (clippedDirs.up) {
+            sendOnce(g, direction::up);
+          }
           continue;
         }
 
@@ -401,7 +413,11 @@ public:
           sendOnce(g, direction::up);
           continue;
         }
-      }
+      // }
+
+      // guard against losing a gaussian
+      // should only get here in very specific cases
+      insert(vertsIn, g);
     }
   } 
 
