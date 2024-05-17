@@ -400,13 +400,16 @@ public:
       // the gaussian is being propagated away from the anchor,
       // we need to render and pass it on until the extent is fully rendered.
       directions sendTo;
-      auto clippedBB = g2D.GetBoundingBox().clip(tb, sendTo);
-      auto count = rasterise(g2D, clippedBB, tb);
+      auto bb = g2D.GetBoundingBox().clip(tb, sendTo);
 
-      if (!gaussianProtocol(g, sendTo, recievedFrom)) {
-        // guard against losing a gaussian
-        // should only get here in very specific cases
-        insert(vertsIn, g);
+      if (bb.diagonal().length() < tb.diagonal().length() * 5) {
+        auto clippedBB = bb.clip(tb, sendTo);
+        auto count = rasterise(g2D, clippedBB, tb);
+        if (!gaussianProtocol(g, sendTo, recievedFrom)) {
+          // guard against losing a gaussian
+          // should only get here in very specific cases
+          insert(vertsIn, g);
+        }
       }
     }
   } 
