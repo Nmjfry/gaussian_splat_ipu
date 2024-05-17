@@ -120,16 +120,16 @@ int main(int argc, char** argv) {
   auto centre = bb.centroid();
   // make fb.numTiles copies of a 2D gaussian
   splat::Gaussians gsns;
-  for (std::size_t i = 1; i < pts.size(); i+=100) {
+  ipu_utils::logger()->info("Generating {} gaussians", pts.size() / 20);
+  for (std::size_t i = 1; i < pts.size(); i+=20) {
     auto pt = pts[i].p;
     splat::Gaussian3D g;
     g.colour = {.4f, 0.f, .1f, 0.9f};
     g.mean = {pt.x, pt.y, pt.z, 1.f};
-    g.gid = (float) i ;
-    g.scale = {1.0f, 1.0f, 1.0f};
+    g.gid = (float) i;
+    g.scale = {.2f, .2f, .2f};
     gsns.push_back(g);
   }
-
 
   auto ipuSplatter = createIpuBuilder(gsns, fb, args["no-amp"].as<bool>());
   ipu_utils::GraphManager gm;

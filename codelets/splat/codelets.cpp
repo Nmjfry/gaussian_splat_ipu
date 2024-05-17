@@ -18,8 +18,6 @@ using namespace splat;
 #include <ipu_builtins.h>
 #endif
 
-DEF_FUNC_CALL_PTRS("_ZN12Transform4x45splatERN5splat9PrimitiveERKNS0_8Bounds2fE", "_ZNK5splat10Gaussian2D14getBoundingBoxEv,_ZNK5splat10Gaussian2D6insideEff");
-
 // Multi-Vertex to transform every 4x1 vector
 // in an array by the same 4x4 transformation matrix.
 // Uses the OpenGL Math (GLM) library for demonstration
@@ -234,20 +232,6 @@ public:
     }
   }
 
-  void sendOnce(const Gaussian3D &sq, directions possibleDirs, direction recievedDirection) {
-    if (recievedDirection != direction::right && possibleDirs.right) {
-      insert(rightOut, sq);
-    } else if (recievedDirection != direction::left && possibleDirs.left) {
-      insert(leftOut, sq);
-    } else if (recievedDirection != direction::up && possibleDirs.up) {
-      insert(upOut, sq);
-    } else if (recievedDirection != direction::down && possibleDirs.down) {
-      insert(downOut, sq);
-    } else {
-      insert(vertsIn, sq);
-    }
-  }
-
   void colourFb(const ivec4 &colour, unsigned workerId) {
     const auto startIndex = 4 * workerId;
     for (auto i = startIndex; i < localFb.size(); i += 4 * numWorkers()) {
@@ -297,8 +281,6 @@ public:
         break;
       }
 
-            // if we recieved a gaussian then we colour the framebuffer green
-
       ivec3 cov2D = g.ComputeCov2D(viewmatrix, 640.f, 360.f);
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
       auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
@@ -306,9 +288,12 @@ public:
 
       if (tb.contains(g2D.mean)) {
         directions dirs;
-        auto bb = g2D.GetBoundingBox().clip(tb, dirs);
-        rasterise(g2D, bb, tb);
-        send(g, dirs);
+        auto bb = g2D.GetBoundingBox();
+        if (bb.diagonal().length() < tb.diagonal().length() * 5) {
+          bb = bb.clip(tb, dirs);
+          rasterise(g2D, bb, tb);
+          send(g, dirs);
+        }
         continue;
       } 
 
@@ -426,39 +411,6 @@ public:
     }
   } 
 
-  void renderStored(const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
-    const auto tb = tfb.getTileBounds(tile_id[0]);
-
-    for (auto i = 0; i < stored.size(); i+=16) {
-      Gaussian3D g = unpackGaussian3D(stored, i, viewmatrix, vp);
-      if (g.gid <= 0) {
-        break;
-      }
-
-      auto green = ivec4{0.0f, 0.3f, 0.0f, 0.0f};
-      colourFb(green);
-
-      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 640.f, 360.f);
-      glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
-      auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
-      Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
-
-      if (tb.contains(g2D.mean)) { 
-        // if gaussian is anchored then we will store
-        // and render in the main loop 
-        insert(vertsIn, g);
-        evict(stored, i);
-        continue;
-      } 
-
-      auto bb = g2D.GetBoundingBox().clip(tb);
-      auto count = rasterise(g2D, bb, tb);
-
-      if (count < 1) {
-        evict(stored, i);
-      }
-    }
-  }
 
   bool compute(unsigned workerId) {
 
@@ -488,12 +440,7 @@ public:
     // Transpose because GLM storage order is column major:
     const auto viewmatrix = glm::transpose(glm::make_mat4(&matrix[0]));
 
-    // if (tile_id[0] == 669) {
-    //   // 
-    // }
-
     renderMain(viewmatrix, tfb, vp);
-    // // renderStored(viewmatrix, tfb, vp);
 
     readInput(rightIn, direction::right, viewmatrix, tfb, vp);
     readInput(leftIn, direction::left, viewmatrix, tfb, vp);
