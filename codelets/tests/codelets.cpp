@@ -75,7 +75,7 @@ public:
 
     auto tb = tfb.getTileBounds(3);
     auto tb1 = tfb.getTileBounds(1);
-    auto dist = splat::ivec2::manhattanDistance(tb.min, tb1.min);
+    auto dist = tfb.manhattanDistance(tb.min, tb1.min);
 
     CHECK_EQUAL(dist, 2 * IPU_TILEWIDTH);
 
@@ -86,8 +86,8 @@ public:
     auto tb2 = tfb.getTileBounds(next);
     auto tb3 = tfb.getTileBounds(down);
 
-    auto dist2 = splat::ivec2::manhattanDistance(mid120, tb2.centroid());
-    auto dist3 = splat::ivec2::manhattanDistance(mid120, tb3.centroid());
+    auto dist2 = tfb.manhattanDistance(mid120, tb2.centroid());
+    auto dist3 = tfb.manhattanDistance(mid120, tb3.centroid());
 
     CHECK_EQUAL(dist2, IPU_TILEWIDTH);
     CHECK_EQUAL(dist3, IPU_TILEHEIGHT);
@@ -102,24 +102,40 @@ class GaussianTests : public poplar::Vertex {
     const splat::TiledFramebuffer tfb(IPU_TILEWIDTH, IPU_TILEHEIGHT);
 
     splat::Gaussian3D g;
-    g.colour = {1.0f, 0.f, 0.f, 0.9f};
-    g.mean = {640.f, 320.f, 0.f, 1.f};
+    g.colour = {.4f, 0.f, 0.f, 0.9f};
+    g.mean = {0.f, 0.f, 0.f, 1.f};
     g.gid = 9;
-    g.scale = {4.0f, 0.f, 4.0f};
+    g.scale = {1.0f, 1.0f, 1.0f};
 
-    splat::Bounds2f bb = g.getBoundingBox();
-    printf("Bounds: %f %f %f %f\n", bb.min.x, bb.min.y, bb.max.x, bb.max.y);
+    splat::Gaussian2D g2D({640.f, 360.f}, g.colour, {4.f, 0.5f, 4.f});
 
-    bool inside = g.inside(640.f, 320.f);
-    bool outside = g.inside(bb.min.x, bb.min.y);
+    const auto tb = tfb.getTileBounds(0);
+    const auto tb2 = tfb.getTileBounds(40);
+    const auto tb3 = tfb.getTileBounds(39);
 
-    CHECK_EQUAL(inside, true);
-    CHECK_EQUAL(outside, false);
+    auto dstTile = tfb.pixCoordToTile(g2D.mean.x, g2D.mean.y);
+    printf("dstTile: %f\n", dstTile);
+    auto dstCentre = tfb.getTileBounds(dstTile).centroid();
+    printf("src centre: %f %f\n", tb.centroid().x, tb.centroid().y);
+    auto direction = tfb.getBestDirection(tb.centroid(), dstCentre);
 
-    // CHECK_EQUAL(bb.min.x, 639.f);
-    // CHECK_EQUAL(bb.min.y, 319.f);
-    // CHECK_EQUAL(bb.max.x, 641.f);
-    // CHECK_EQUAL(bb.max.y, 321.f);
+    CHECK_EQUAL(direction, splat::direction::right);
+
+    auto dir = tfb.getBestDirection(tb.centroid(), tb2.centroid());
+    CHECK_EQUAL(dir, splat::direction::down);
+
+    auto dir2 = tfb.getBestDirection(tb2.centroid(), tb3.centroid());
+    CHECK_EQUAL(dir2, splat::direction::right);
+
+    auto dir3 = tfb.getBestDirection(tb2.centroid(), tb.centroid());
+    CHECK_EQUAL(dir3, splat::direction::up);
+
+    auto dir4 = tfb.getBestDirection(tb2.centroid(), tb2.centroid());
+    CHECK_EQUAL(dir4, splat::direction::none);
+
+    auto dir5 = tfb.getBestDirection(tb3.centroid(), tb.centroid());
+    CHECK_EQUAL(dir5, splat::direction::left);
+
 
     return true;
   }
