@@ -123,7 +123,7 @@ int main(int argc, char** argv) {
   for (std::size_t i = 0; i < fb.numTiles; ++i) {
 
     splat::Gaussian3D g;
-    g.colour = {.4f, 0.f, 0.f, 0.9f};
+    g.colour = {.1f, 1.f, 1.f, 0.9f};
     g.mean = {centre.x, centre.y, centre.z, 1.f};
     g.gid = 9;
     g.scale = {1.0f, 1.0f, 1.0f};

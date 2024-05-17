@@ -279,7 +279,7 @@ public:
         if(g.inside(i,j)) {
           setPixel(px.x, px.y, g.colour);
         } else {
-          // setPixel(px.x, px.y, tc);
+          setPixel(px.x, px.y, tc);
         }
         count++;
       }
