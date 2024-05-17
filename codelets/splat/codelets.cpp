@@ -8,6 +8,9 @@
 #include <glm/gtc/type_ptr.hpp>
 #include </home/nf20/workspace/gaussian_splat_ipu/include/tileMapping/tile_config.hpp>
 #include </home/nf20/workspace/gaussian_splat_ipu/include/splat/viewport.hpp>
+#include </home/nf20/workspace/gaussian_splat_ipu/include/splat/ipu_geometry.hpp>
+
+using namespace splat;
 
 #ifdef __IPU__
 #include <ipu_vector_math>
@@ -27,324 +30,425 @@
 class Transform4x4 : public poplar::MultiVertex {
 public:
   poplar::Input<poplar::Vector<float>> matrix;
-  poplar::Input<poplar::Vector<float>> vertsIn;
+  poplar::InOut<poplar::Vector<float>> vertsIn;
+
   poplar::Output<poplar::Vector<float>> localFb;
   poplar::Input<poplar::Vector<int>> tile_id;
 
   poplar::Input<poplar::Vector<float>> rightIn;
   poplar::Output<poplar::Vector<float>> rightOut;
-  unsigned squaresSentRight = 0;
 
   poplar::Input<poplar::Vector<float>> leftIn; 
   poplar::Output<poplar::Vector<float>> leftOut;
-  unsigned squaresSentLeft = 0;
 
   poplar::Input<poplar::Vector<float>> upIn;
   poplar::Output<poplar::Vector<float>> upOut;
-  unsigned squaresSentUp = 0;
 
   poplar::Input<poplar::Vector<float>> downIn;
   poplar::Output<poplar::Vector<float>> downOut;
-  unsigned squaresSentDown = 0;
 
-  poplar::InOut<poplar::Vector<float>> squares;
+  poplar::InOut<poplar::Vector<float>> stored;
 
-  unsigned gaussiansInitialised = 0;
+  bool init;
 
   unsigned toByteBufferIndex(float x, float y) {
     return unsigned(x + y * IPU_TILEWIDTH) * 4;
   } 
 
-  void setPixel(float x, float y, ivec4 &colour) {
+  void setPixel(float x, float y, const ivec4 &colour) {
     ivec4 pixel;
     unsigned idx = toByteBufferIndex(x, y);
+    if (idx >= localFb.size()) {
+      printf("ERROR: setting pixel outside of framebuffer bounds\n");
+      printf(" --> please check coordinate mapping is in tile space\n");
+      return;
+    }
     memcpy(&pixel, &localFb[idx], sizeof(pixel));
     pixel = pixel + colour;
     memcpy(&localFb[idx], &pixel, sizeof(pixel));
-  }
-
-  void splat(ivec4 colour, ivec2 tl, ivec2 br) {
-    for (auto i = tl.x; i < br.x; i++) {
-      for (auto j = tl.y; j < br.y; j++) {
-        setPixel(i, j, colour);
-      }
-    }
   }
 
   ivec2 viewspaceToTile(const ivec2& pt, ivec2 tlBound) {
     return {floor(pt.x - tlBound.x), floor(pt.y - tlBound.y)};
   }
 
-  bool insertAt(poplar::Vector<float> &buffer, unsigned idx, struct square& sq) {
-    if (idx + sizeof(square) > buffer.size()) {
+  ivec4 getTileColour() {
+    ivec4 c;
+    if (tile_id[0] % 3 == 0) {
+      c = {.3f, 0.0f, 0.0f, 0.0f};
+    } else if (tile_id[0] % 3 == 1) {
+      c = {0.0f, .3f, 0.0f, 0.0f};
+    } else {
+      c = {0.0f, 0.0f, .3f, 0.0f};
+    }
+    return c;
+  }
+
+  // bool tileContainsBoundary(Primitive &p, const Bounds2f& tb) {
+  //   return (p.inside(tb.min.x, tb.min.y) || p.inside(tb.min.x, tb.max.y) || p.inside(tb.max.x, tb.min.y) || p.inside(tb.max.x, tb.max.y));
+  // }
+
+  bool insertAt(poplar::Vector<float> &buffer, unsigned idx, const Gaussian3D& g) {
+    if (idx + 16 > buffer.size()) {
       return false;
     }
-    memcpy(&buffer[idx], &sq, sizeof(sq.centre));
-    memcpy(&buffer[idx+sizeof(sq.centre)], &sq.colour, sizeof(sq.colour));
-    memcpy(&buffer[idx+sizeof(sq.centre)+sizeof(sq.colour)], &sq.gid, sizeof(sq.gid));
+    memcpy(&buffer[idx], &g.mean, sizeof(g.mean));
+    memcpy(&buffer[idx+4], &g.colour, sizeof(g.colour));
+    memcpy(&buffer[idx+8], &g.gid, sizeof(g.gid));
+    memcpy(&buffer[idx+9], &g.scale, sizeof(g.scale));
+    memcpy(&buffer[idx+12], &g.rot, sizeof(g.rot));
     return true;
   }
 
-  bool insert(poplar::Vector<float> &buffer, struct square& sq) {
+  bool insertAt(poplar::InOut<poplar::Vector<float>> &buffer, unsigned idx, const Gaussian3D& g) {
+    if (idx + 16 > buffer.size()) {
+      return false;
+    }
+    memcpy((void *) &buffer[idx], &g.mean, sizeof(g.mean));
+    memcpy((void *) &buffer[idx+4], &g.colour, sizeof(g.colour));
+    memcpy((void *) &buffer[idx+8], &g.gid, sizeof(g.gid));
+    memcpy((void *) &buffer[idx+9], &g.scale, sizeof(g.scale));
+    memcpy((void *) &buffer[idx+12], &g.rot, sizeof(g.rot));
+    return true;
+  }
+
+  bool insert(poplar::InOut<poplar::Vector<float>> &buffer, const Gaussian3D& g) {
     unsigned idx = buffer.size();
-    for (auto i = 0; i < buffer.size(); i+=sizeof(square)) {
-      auto gid = unpackGaussian(buffer, i).gid;
-      if (gid == sq.gid) {
+    for (auto i = 0; i < buffer.size(); i+=16) {
+      float gid;
+      memcpy(&gid, &buffer[i+8], sizeof(gid)); // TODO: specify gid
+      if (gid == g.gid) {
         return false;
       }
       if (gid == 0u && i < idx) {
         idx = i;
       }
     }
-    return insertAt(buffer, idx, sq);
+    return insertAt(buffer, idx, g);
   }
 
-  square unpackGaussian(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx) {
-    struct square sq;
-
-    ivec4 centre;
-    memcpy(&centre, &buffer[idx], sizeof(centre));
-    ivec4 colour;
-    memcpy(&colour, &buffer[idx+sizeof(centre)], sizeof(colour));
-    unsigned gid;
-    memcpy(&gid, &buffer[idx+sizeof(centre)+sizeof(colour)], sizeof(gid));
-
-    sq.centre = centre;
-    sq.colour = colour;
-    sq.gid = gid;
-    
-    return sq;
+  bool insert(poplar::Vector<float> &buffer, const Gaussian3D& g) {
+    unsigned idx = buffer.size();
+    for (auto i = 0; i < buffer.size(); i+=16) {
+      float gid;
+      memcpy(&gid, &buffer[i+8], sizeof(gid)); // TODO: specify gid
+      if (gid == g.gid) {
+        return insertAt(buffer, i, g);
+      }
+      if (gid == 0u && i < idx) {
+        idx = i;
+      }
+    }
+    return insertAt(buffer, idx, g);
   }
 
-  square unpackGaussian(poplar::Vector<float> &buffer, unsigned idx) {
-    struct square sq;
+  // TODO: change to use templates instead of inheritance as virtual function insert 
+  // vtable pointer so unpacking structs needs to be shifted by 1
+  Gaussian3D unpackGaussian3D(poplar::InOut<poplar::Vector<float>> &buffer, unsigned idx, const glm::mat4& viewmatrix, const splat::Viewport& vp) {
 
-    ivec4 centre;
-    memcpy(&centre, &buffer[idx], sizeof(centre));
+    ivec4 mean;
+    memcpy(&mean, &buffer[idx], sizeof(mean));
     ivec4 colour;
-    memcpy(&colour, &buffer[idx+sizeof(centre)], sizeof(colour));
-    unsigned gid;
-    memcpy(&gid, &buffer[idx+sizeof(centre)+sizeof(colour)], sizeof(gid));
+    memcpy(&colour, &buffer[idx+4], sizeof(colour));
+    float gid;
+    memcpy(&gid, &buffer[idx+8], sizeof(gid));
+    ivec3 scale;
+    memcpy(&scale, &buffer[idx+9], sizeof(scale));
+    ivec4 rot;
+    memcpy(&rot, &buffer[idx+12], sizeof(rot));
 
-    sq.centre = centre;
-    sq.colour = colour;
-    sq.gid = gid;
-    
-    return sq;
+    struct Gaussian3D g;
+    g.mean = mean;
+    g.scale = scale; 
+    g.rot = rot;
+    g.colour = colour;
+    g.gid = gid;
+
+    return g;
+  }
+
+  Gaussian3D unpackGaussian3D(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx, const glm::mat4& viewmatrix, const splat::Viewport& vp) {
+
+    ivec4 mean;
+    memcpy(&mean, &buffer[idx], sizeof(mean));
+    ivec4 colour;
+    memcpy(&colour, &buffer[idx+4], sizeof(colour));
+    float gid;
+    memcpy(&gid, &buffer[idx+8], sizeof(gid));
+    ivec3 scale;
+    memcpy(&scale, &buffer[idx+9], sizeof(scale));
+    ivec4 rot;
+    memcpy(&rot, &buffer[idx+12], sizeof(rot));
+
+    struct Gaussian3D g;
+    g.mean = mean;
+    g.scale = scale; 
+    g.rot = rot;
+    g.colour = colour;
+    g.gid = gid;
+
+    return g;
   }
 
     // invalidate a gaussian in the buffer
   void evict(poplar::Vector<float> &buffer, unsigned idx) {
-    struct square sq;
-    sq.gid = 0;
-    insertAt(buffer, idx, sq);
+    Gaussian3D g;
+    g.gid = 0.f;
+    insertAt(buffer, idx, g);
   }
 
-  enum dir {
-    left,
-    right,
-    up,
-    down
-  };
+  void evict(poplar::InOut<poplar::Vector<float>> &buffer, unsigned idx) {
+    Gaussian3D g;
+    g.gid = 0.f;
+    insertAt(buffer, idx, g);
+  }
 
-  void send(struct square &sq, directions dirs) {
+  void send(Gaussian3D &g, directions dirs) {
     if (dirs.right) {
-      insert(rightOut, sq);
+      insert(rightOut, g);
     }
     if (dirs.left) {
-      insert(leftOut, sq);
+      insert(leftOut, g);
     }
     if (dirs.up) {
-      insert(upOut, sq);
+      insert(upOut, g);
     }
     if (dirs.down) {
-      insert(downOut, sq);
-    }
-    if (!dirs.down && !dirs.up && !dirs.left && !dirs.right) {
-      insert(squares, sq);
+      insert(downOut, g);
     }
   }
 
-  void sendOnce(struct square &sq, directions possibleDirs, dir recievedDirection) {
-    if (recievedDirection != dir::right && possibleDirs.right) {
-      insert(rightOut, sq);
-    } else if (recievedDirection != dir::left && possibleDirs.left) {
-      insert(leftOut, sq);
-    } else if (recievedDirection != dir::up && possibleDirs.up) {
-      insert(upOut, sq);
-    } else if (recievedDirection != dir::down && possibleDirs.down) {
-      insert(downOut, sq);
+  void sendOnce(const Gaussian3D &g, direction dir) {
+    if (dir == direction::right) {
+      insert(rightOut, g);
+    } else if (dir == direction::down) {
+      insert(downOut, g);
+    } else if (dir == direction::left) {
+      insert(leftOut, g);
+    } else if (dir == direction::up) {
+      insert(upOut, g);
     } else {
-      insert(squares, sq);
+      insert(vertsIn, g);
     }
   }
 
-  void colourFb(const ivec4 &colour) {
-    for (auto i = 0; i < localFb.size(); i+=4) {
+  void colourFb(const ivec4 &colour, unsigned workerId) {
+    const auto startIndex = 4 * workerId;
+    for (auto i = startIndex; i < localFb.size(); i += 4 * numWorkers()) {
       memcpy(&localFb[i], &colour, sizeof(colour));
     }
   }
 
-  void initGaussians(ivec4& colour, const glm::mat4& m, const std::pair<ivec2, ivec2> tb, const splat::Viewport& vp) {
-    auto [tlBound, brBound] = tb;
-
-    // loop over the points originally stored on this tile and initialise the gaussians
-    for (auto i = 0; i < vertsIn.size(); i+=4, gaussiansInitialised++) {
-      auto upt = glm::make_vec4(&vertsIn[i]);
-
-      // give point a square extent
-      glm::vec2 centre2D = vp.clipSpaceToViewport(m * upt);
-      ivec2 topleft = {centre2D.x - (EXTENT / 2.0f), centre2D.y - (EXTENT / 2.0f)};
-      ivec2 bottomright = {centre2D.x + (EXTENT / 2.0f), centre2D.y + (EXTENT / 2.0f)};
-
-      // clip the square to the tile, return true 
-      // if it needs to be copied to a different direction
-      auto dirs = square::clip(tlBound, brBound, topleft, bottomright);
-
-      struct square sq;
-      sq.centre = {upt.x, upt.y, upt.z, upt.w};
-      sq.gid = (i/4)+1+tile_id[0]*vertsIn.size(); // give unique gaussian id
-      sq.colour = colour;
-
-      send(sq, dirs);
-      if (dirs.keep) {
-        insertAt(squares, gaussiansInitialised * sizeof(square), sq);
-      }
+  void addBG(const ivec4 &colour) {
+    for (auto i = 0; i < localFb.size(); i += 4) {
+      ivec4 pixel;
+      memcpy(&pixel, &localFb[i], sizeof(pixel));
+      pixel = pixel + colour;
+      memcpy(&localFb[i], &pixel, sizeof(pixel));
     }
-
   }
 
- 
+  void colourFb(const ivec4 &colour) {
+    for (auto i = 0; i < localFb.size(); i += 4) {
+      memcpy(&localFb[i], &colour, sizeof(colour));
+    }
+  }
 
-  void readBuffer(poplar::Input<poplar::Vector<float>> &bufferIn, dir direction, const glm::mat4& m, const std::pair<ivec2, ivec2> tb, const splat::Viewport& vp) {
-    auto [tlBound, brBound] = tb;
+  unsigned rasterise(const Gaussian2D &g, const Bounds2f& bb, const Bounds2f& tb) {
+    auto tc = getTileColour();
+    auto count = 0u;
+    for (auto i = bb.min.x; i < bb.max.x; i++) {
+      for (auto j = bb.min.y; j < bb.max.y; j++) {
+        auto px = viewspaceToTile({i, j}, tb.min);
+        if(g.inside(i,j)) {
+          setPixel(px.x, px.y, g.colour);
+        } else {
+          // setPixel(px.x, px.y, tc);
+        }
+        count++;
+      }
+    }
+    return count;
+  }
 
-    for (auto i = 0; i < bufferIn.size(); i+=sizeof(square)) {
-      struct square sq = unpackGaussian(bufferIn, i);
-      if (sq.gid == 0u) {
+  void renderMain(const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
+    const auto tb = tfb.getTileBounds(tile_id[0]);
+    const auto centre = tb.centroid();
+
+    for (auto i = 0; i < vertsIn.size(); i+=16) {
+      Gaussian3D g = unpackGaussian3D(vertsIn, i, viewmatrix, vp);
+      if (g.gid <= 0) {
         break;
       }
 
-      const ivec4 green = {0.0f, 0.2f, 0.0f, 0.0f};
-      colourFb(green);
+      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 640.f, 360.f);
+      glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
+      auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
+      Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
 
-      auto upt = glm::vec4(sq.centre.x, sq.centre.y, sq.centre.z, sq.centre.w);
-      glm::vec2 centre2D = vp.clipSpaceToViewport(m * upt);
-      // give point a square extent
-      ivec2 topleft = {centre2D.x - (EXTENT / 2.0f), centre2D.y - (EXTENT / 2.0f)};
-      ivec2 bottomright = {centre2D.x + (EXTENT / 2.0f), centre2D.y + (EXTENT / 2.0f)};
-
-      // clip the square to the tile, return true 
-      // if it needs to be copied to a different direction
-      auto dirs = square::clip(tlBound, brBound, topleft, bottomright);
-
-      // set the topleft and bottomright to be relative to the tile
-      ivec2 tlTileCoords = viewspaceToTile(topleft, tlBound);
-      ivec2 brTileCoords = viewspaceToTile(bottomright, tlBound);
-
-      splat(sq.colour, tlTileCoords, brTileCoords);
-      if (dirs.keep) { 
-        insert(squares, sq);
-      }  
-      sendOnce(sq, dirs, direction);
-    }
-  }
-
-  void renderStored(poplar::Vector<float> &bufferIn, const glm::mat4& m, const std::pair<ivec2, ivec2> tb, const splat::Viewport& vp) {
-    auto [tlBound, brBound] = tb;
-
-    for (auto i = 0; i < bufferIn.size(); i+=sizeof(square)) {
-      struct square sq = unpackGaussian(bufferIn, i);
-      if (sq.gid == 0u) {
-        continue;
-      }
-
-      auto upt = glm::vec4(sq.centre.x, sq.centre.y, sq.centre.z, sq.centre.w);
-      glm::vec2 centre2D = vp.clipSpaceToViewport(m * upt);
-      // give point a square extent
-      ivec2 topleft = {centre2D.x - (EXTENT / 2.0f), centre2D.y - (EXTENT / 2.0f)};
-      ivec2 bottomright = {centre2D.x + (EXTENT / 2.0f), centre2D.y + (EXTENT / 2.0f)};
-
-      // clip the square to the tile, return true 
-      // if it needs to be copied to a different direction
-      auto dirs = square::clip(tlBound, brBound, topleft, bottomright);
-
-      // set the topleft and bottomright to be relative to the tile
-      ivec2 tlTileCoords = viewspaceToTile(topleft, tlBound);
-      ivec2 brTileCoords = viewspaceToTile(bottomright, tlBound);
-
-      splat(sq.colour, tlTileCoords, brTileCoords);
-
-      if (!dirs.keep) {
-        evict(bufferIn, i);
-      } 
-      send(sq, dirs);
-
-    }
-  }
-
-  bool isFull(poplar::Vector<float> &buffer) {
-    for (auto i = 0; i < buffer.size(); i+=sizeof(square)) {
-      if (unpackGaussian(buffer, i).gid == 0u) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  bool containsDuplicate(poplar::Vector<float> &buffer) {
-    for (auto i = 0; i < buffer.size(); i+=sizeof(square)) {
-      auto sq = unpackGaussian(buffer, i);
-      for (auto j = i+sizeof(square); j < buffer.size(); j+=sizeof(square)) {
-        if (sq.gid == unpackGaussian(buffer, j).gid && sq.gid != 0u) {
-          return true;
+      if (tb.contains(g2D.mean)) {
+        directions dirs;
+        auto bb = g2D.GetBoundingBox();
+        if (bb.diagonal().length() < tb.diagonal().length() * 5) {
+          bb = bb.clip(tb, dirs);
+          rasterise(g2D, bb, tb);
+          send(g, dirs);
         }
+        continue;
+      } 
+
+      auto dstTile = tfb.pixCoordToTile(g2D.mean.y, g2D.mean.x);
+      auto dstCentre = tfb.getTileBounds(dstTile).centroid();
+      auto direction = tfb.getBestDirection(tb.centroid(), dstCentre);
+
+      evict(vertsIn, i);
+      sendOnce(g, direction);
+    }
+  }
+
+  bool gaussianProtocol(const Gaussian3D& g, const directions& sendTo, const direction& recievedFrom) {
+    if (recievedFrom == direction::right && sendTo.left) {
+      sendOnce(g, direction::left);
+      if (sendTo.down) {
+        sendOnce(g, direction::down);
       }
+      if (sendTo.up) {
+        sendOnce(g, direction::up);
+      }
+      return true;
+    }
+
+    if (recievedFrom == direction::left && sendTo.right) {
+      sendOnce(g, direction::right);
+      if (sendTo.down) {
+        sendOnce(g, direction::down);
+      }
+      if (sendTo.up) {
+        sendOnce(g, direction::up);
+      }
+      return true;
+    }
+
+    if (recievedFrom == direction::up && sendTo.down) {
+      sendOnce(g, direction::down);
+      return true;
+    }
+
+    if (recievedFrom == direction::down && sendTo.up) {
+      sendOnce(g, direction::up);
+      return true;
+    }
+
+    if (sendTo.any()) {
+      if (sendTo.up) {
+        sendOnce(g, direction::up);
+      }
+      if (sendTo.down) {
+        sendOnce(g, direction::down);
+      }
+      return true;
     }
     return false;
   }
 
-  bool compute(unsigned workerId) {
-    if (workerId != 0) {
-      return true;
+  void readInput(poplar::Input<poplar::Vector<float>> &bufferIn,
+                                    const direction& recievedFrom,
+                                    const glm::mat4& viewmatrix,
+                                    const TiledFramebuffer& tfb,
+                                    const splat::Viewport& vp) {
+    // Get the boundary of the current tile's framebuffer section
+    const auto tb = tfb.getTileBounds(tile_id[0]);
+    const auto tbPrev = tfb.getTileBounds(tfb.getNearbyTile(tile_id[0], recievedFrom));
+
+    // Iterate over the input channel and unpack the Gaussian3D structs
+    for (auto i = 0; i < bufferIn.size(); i+=16) {
+      Gaussian3D g = unpackGaussian3D(bufferIn, i, viewmatrix, vp);
+      if (g.gid == 0) {
+        // gid 0 if the place in the buffer is not occupied,
+        // since the channels are filled from the front we can break
+        // when we hit an empty slot
+        break;
+      }
+
+      // project the 3D gaussian into 2D using EWA splatting algorithm
+      glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
+      auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
+      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 640.f, 360.f);
+      Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
+
+      if (tb.contains(g2D.mean)) {
+        // anchor arrived so we insert and let
+        // render main handle the rest
+        insert(vertsIn, g);
+        continue;
+      } 
+
+      auto dstTile = tfb.pixCoordToTile(g2D.mean.y, g2D.mean.x);
+      ivec2 dstCentre = tfb.getTileBounds(dstTile).centroid();
+      ivec2 prevCentre = tbPrev.centroid();
+      ivec2 curCentre = tb.centroid();
+
+      auto prevDist = tfb.manhattanDistance(prevCentre, dstCentre);
+      auto curDist = tfb.manhattanDistance(curCentre, dstCentre);
+
+      if (curDist < prevDist) {
+        auto direction = tfb.getBestDirection(curCentre, dstCentre);
+        sendOnce(g, direction);
+        continue;
+      }
+
+      // the gaussian is being propagated away from the anchor,
+      // we need to render and pass it on until the extent is fully rendered.
+      directions sendTo;
+      auto clippedBB = g2D.GetBoundingBox().clip(tb, sendTo);
+      auto count = rasterise(g2D, clippedBB, tb);
+
+      if (!gaussianProtocol(g, sendTo, recievedFrom)) {
+        // guard against losing a gaussian
+        // should only get here in very specific cases
+        insert(vertsIn, g);
+      }
     }
-    // construct mapping from tile to framebuffer
-    const TiledFramebuffer fbMapping(IPU_TILEWIDTH, IPU_TILEHEIGHT);
-    const splat::Viewport vp(0.0f, 0.0f, IMWIDTH, IMHEIGHT);
+  } 
 
-    // Transpose because GLM storage order is column major:
-    const auto m = glm::transpose(glm::make_mat4(&matrix[0]));
-    const auto tb = fbMapping.getTileBounds(tile_id[0]);
-    const auto initNumGaussians = vertsIn.size() / sizeof(square);
 
-    ivec4 tidColour = {1.0f, 0.0f, tile_id[0] * (1.0f / fbMapping.numTiles), 0.0f};
+  bool compute(unsigned workerId) {
+
     // zero the framebuffer and clear the send buffers
-    const ivec4 black = {0.0f, 0.0f, 0.0f, 0.0f};
-    colourFb(black);
+    colourFb({0.0f, 0.0f, 0.0f, 0.0f}, workerId);
+
+    const unsigned GAUSSIAN3D_SIZE = 16;
+    const auto startIndex = GAUSSIAN3D_SIZE * workerId;
 
     //clear all of the out buffers:
-    for (auto i = 0; i < rightOut.size(); i++) {
-      memset(&rightOut[i], 0, sizeof(float));
-      memset(&leftOut[i], 0, sizeof(float));
-      memset(&upOut[i], 0, sizeof(float));
-      memset(&downOut[i], 0, sizeof(float));
+    for (auto i = startIndex; i < rightOut.size(); i+=GAUSSIAN3D_SIZE * numWorkers()) {
+      evict(rightOut, i);
     }
-   
-    if (gaussiansInitialised < initNumGaussians) {
-      // initialise the gaussians from the pts
-      // sends gaussians to other tiles, or stores in local memory
-      // recover the original vector for extra gaussian storage
-      initGaussians(tidColour, m, tb, vp);
-    } 
-    
-    // read the gaussians from the send buffers,
-    // project and clip, send to other tiles if need 
-    readBuffer(rightIn, dir::right, m, tb, vp);
-    readBuffer(leftIn, dir::left, m, tb, vp);
-    readBuffer(upIn, dir::up, m, tb, vp);
-    readBuffer(downIn, dir::down, m, tb, vp);
+    for (auto i = startIndex; i < leftOut.size(); i+=GAUSSIAN3D_SIZE * numWorkers()) {
+      evict(leftOut, i);
+    }
+    for (auto i = startIndex; i < upOut.size(); i+=GAUSSIAN3D_SIZE * numWorkers()) {
+      evict(upOut, i);
+    }
+    for (auto i = startIndex; i < downOut.size(); i+=GAUSSIAN3D_SIZE * numWorkers()) {
+      evict(downOut, i);
+    }
 
-    renderStored(squares, m, tb, vp);
+    // construct mapping from tile to framebuffer
+    const TiledFramebuffer tfb(IPU_TILEWIDTH, IPU_TILEHEIGHT);
+    const splat::Viewport vp(0.0f, 0.0f, IMWIDTH, IMHEIGHT);
+    // Transpose because GLM storage order is column major:
+    const auto viewmatrix = glm::transpose(glm::make_mat4(&matrix[0]));
+
+    renderMain(viewmatrix, tfb, vp);
+
+    readInput(rightIn, direction::right, viewmatrix, tfb, vp);
+    readInput(leftIn, direction::left, viewmatrix, tfb, vp);
+    readInput(upIn, direction::up, viewmatrix, tfb, vp);
+    readInput(downIn, direction::down, viewmatrix, tfb, vp);
+
+
+   
     return true;
   }
  

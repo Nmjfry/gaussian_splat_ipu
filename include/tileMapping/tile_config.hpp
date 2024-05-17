@@ -1,6 +1,6 @@
 #pragma once
 
-#include <glm/glm.hpp>
+#include </home/nf20/workspace/gaussian_splat_ipu/include/splat/ipu_geometry.hpp>
 
 #define IMWIDTH 1280.0f
 #define IMHEIGHT 720.0f
@@ -14,45 +14,7 @@
 #define IPU_TILEHEIGHT (IMHEIGHT / TILES_DOWN)
 #define IPU_TILEWIDTH  (IMWIDTH / TILES_ACCROSS)
 
-struct ivec4 {
-  float x;
-  float y;
-  float z;
-  float w;
-  struct ivec4 operator+(ivec4 const &other) {
-    return {x + other.x, y + other.y, z + other.z, w + other.w};
-  }
-
-  void print() {
-    printf("x: %f, y: %f, z: %f, w: %f\n", x, y, z, w);
-  }
-};
-
-typedef struct ivec4 ivec4;
-
-struct ivec2 {
-  float x;
-  float y;
-};
-
-typedef struct ivec2 ivec2;
-
-enum class Direction {
-  UP,
-  RIGHT,
-  DOWN,
-  LEFT,
-  NUM_DIRS
-};
-
-typedef struct directions {
-    bool up;
-    bool right;
-    bool down;
-    bool left;
-    bool keep;
-    static const int NUM_DIRS = 4;
-} directions;
+namespace splat {
 
 class TiledFramebuffer {
 public:
@@ -92,7 +54,7 @@ public:
   }
 
   // Compute the tile's positition for a given tile index:
-  std::pair<ivec2, ivec2> getTileBounds(unsigned tid) const {
+  Bounds2f getTileBounds(unsigned tid) const {
     auto div = floor(tid / numTilesAcross);
     auto mod = tid - div * numTilesAcross;
     ivec2 tl;
@@ -101,7 +63,54 @@ public:
     tl.y = floor(div * tileHeight);
     br.x = tl.x + tileWidth;
     br.y = tl.y + tileHeight;
-    return std::make_pair(tl, br);
+    auto bounds = Bounds2f(tl, br);
+    // if (bounds.min.x < 0 || bounds.min.y < 0 || bounds.max.x > width || bounds.max.y > height) {
+    //   printf("Warning!!! Bounds out of range: %f, %f, %f, %f\n", bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y);
+    // }
+    return bounds;
+  }
+
+  unsigned getNearbyTile(unsigned tid, const direction &recievedFrom) const {
+    switch (recievedFrom) {
+      case direction::left:
+        return tid - 1;
+      case direction::right:
+        return tid + 1;
+      case direction::up:
+        return tid - numTilesAcross;
+      case direction::down:
+        return tid + numTilesAcross;
+      default:
+        return tid;
+    }
+  }
+
+  static float manhattanDistance(ivec2 const &a, ivec2 const &b) {
+    return abs(a.x - b.x) + abs(a.y - b.y);
+  }
+
+  direction getBestDirection(ivec2 const &src, ivec2 const &dst) const {
+    auto dist = manhattanDistance(src, dst);
+    if (dist == 0) {
+      return direction::none;
+    }
+    if (src.y < dst.y) {
+      return direction::down;
+    }
+    if (src.y > dst.y) {
+      return direction::up;
+    }
+    if (src.x < dst.x) {
+      return direction::right;
+    }
+    if (src.x > dst.x) {
+      return direction::left;
+    }
+    return direction::none;
+  }
+
+  bool isValidTile(unsigned tid) const {
+    return tid < numTiles;
   }
 
   directions checkImageBoundaries(unsigned tid) {
@@ -129,43 +138,4 @@ public:
   unsigned tid;
 };
 
-#define EXTENT 10.0f
-
-struct square {
-  ivec4 centre;
-  ivec4 colour;
-  unsigned gid;
-
-  static bool isOnTile(ivec2 pos, ivec2 tlBound, ivec2 brBound) {
-    return pos.x >= tlBound.x && pos.x <= brBound.x && pos.y >= tlBound.y && pos.y <= brBound.y;
-  }
-
-  static directions clip(ivec2 tlBound, ivec2 brBound, ivec2& topleft, ivec2& bottomright) {
-    directions dirs;
-
-
-    dirs.left = topleft.x < tlBound.x;
-    dirs.up = topleft.y < tlBound.y;
-    dirs.right = bottomright.x >= brBound.x;
-    dirs.down = bottomright.y >= brBound.y;
-
-    ivec2 topright = {bottomright.x, topleft.y};
-    ivec2 bottomleft = {topleft.x, bottomright.y};
-    dirs.keep = isOnTile(topleft, tlBound, brBound) || isOnTile(bottomright, tlBound, brBound) 
-    || isOnTile(topright, tlBound, brBound) || isOnTile(bottomleft, tlBound, brBound);
-
-    if (dirs.left) {
-      topleft.x = tlBound.x;
-    }
-    if (dirs.up) {
-      topleft.y = tlBound.y;
-    }
-    if (dirs.right) {
-      bottomright.x = brBound.x;
-    }
-    if (dirs.down) {
-      bottomright.y = brBound.y;
-    }
-    return dirs;
-  }
-};
+} // end of namespace splat
