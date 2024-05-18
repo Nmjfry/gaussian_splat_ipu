@@ -130,13 +130,13 @@ public:
 
   // TODO: change to use templates instead of inheritance as virtual function insert 
   // vtable pointer so unpacking structs needs to be shifted by 1
-  Gaussian3D unpackGaussian3D(poplar::InOut<poplar::Vector<float>> &buffer, unsigned idx, const glm::mat4& viewmatrix, const splat::Viewport& vp) {
+  Gaussian3D unpackGaussian3D(poplar::InOut<poplar::Vector<float>> &buffer, unsigned idx) {
     struct Gaussian3D g;
     memcpy(&g, &buffer[idx], sizeof(g));
     return g;
   }
 
-  Gaussian3D unpackGaussian3D(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx, const glm::mat4& viewmatrix, const splat::Viewport& vp) {
+  Gaussian3D unpackGaussian3D(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx) {
     struct Gaussian3D g;
     memcpy(&g, &buffer[idx], sizeof(g));
     return g;
@@ -228,12 +228,12 @@ public:
     const auto centre = tb.centroid();
 
     for (auto i = 0; i < vertsIn.size(); i+=sizeof(Gaussian3D)) {
-      Gaussian3D g = unpackGaussian3D(vertsIn, i, viewmatrix, vp);
+      Gaussian3D g = unpackGaussian3D(vertsIn, i);
       if (g.gid <= 0) {
         break;
       }
 
-      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 640.f, 360.f);
+      ivec3 cov2D = g.ComputeCov2D(viewmatrix, tfb.width / 2, tfb.height / 2);
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
       auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
@@ -314,7 +314,7 @@ public:
 
     // Iterate over the input channel and unpack the Gaussian3D structs
     for (auto i = 0; i < bufferIn.size(); i+=sizeof(Gaussian3D)) {
-      Gaussian3D g = unpackGaussian3D(bufferIn, i, viewmatrix, vp);
+      Gaussian3D g = unpackGaussian3D(bufferIn, i);
       if (g.gid == 0) {
         // gid 0 if the place in the buffer is not occupied,
         // since the channels are filled from the front we can break
@@ -325,7 +325,7 @@ public:
       // project the 3D gaussian into 2D using EWA splatting algorithm
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
       auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
-      ivec3 cov2D = g.ComputeCov2D(viewmatrix, 640.f, 360.f);
+      ivec3 cov2D = g.ComputeCov2D(viewmatrix, tfb.width / 2, tfb.height / 2);
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
 
       if (tb.contains(g2D.mean)) {

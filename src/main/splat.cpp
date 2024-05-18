@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
   auto centre = bb.centroid();
   // make fb.numTiles copies of a 2D gaussian
   splat::Gaussians gsns;
-  ipu_utils::logger()->info("Generating {} gaussians", pts.size() / 20);
+  ipu_utils::logger()->info("Generating {} gaussians", pts.size());
   for (std::size_t i = 0; i < pts.size(); ++i) {
     auto pt = pts[i].p;
     splat::Gaussian3D g;
