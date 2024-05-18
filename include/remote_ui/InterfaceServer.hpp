@@ -28,6 +28,11 @@ const std::vector<std::string> packetTypes {
     "env_rotation",        // Update environment light rotation (client -> server)
     "exposure",            // Update tone-map exposure (client -> server)
     "gamma",               // Update tone-map gamma (client -> server)
+    "X",                   // Update X pos of gaussian mean (client -> server)
+    "Y",                   // Update Y pos of gaussian mean (client -> server)
+    "Z",                   // Update Z pos of gaussian mean (client -> server)
+    "lambda1",             // Update lambda1 of gaussian (client -> server)
+    "lambda2",             // Update lambda2 of gaussian (client -> server)
     "fov",                 // Update field-of-view (bi-directional)
     "render_preview",      // used to send compressed video packets
                            // for render preview (server -> client)
@@ -138,6 +143,41 @@ class InterfaceServer {
                                         stateUpdated = true;
                                       });
 
+      auto subs41 = receiver.subscribe("X",
+                                      [&](const ComPacket::ConstSharedPacket& packet) {
+                                        deserialise(packet, state.X);
+                                        ipu_utils::logger()->trace("X new value: {}", state.X);
+                                        stateUpdated = true;
+                                      });
+
+      auto subs51 = receiver.subscribe("Y",
+                                      [&](const ComPacket::ConstSharedPacket& packet) {
+                                        deserialise(packet, state.Y);
+                                        ipu_utils::logger()->trace("Y new value: {}", state.Y);
+                                        stateUpdated = true;
+                                      });
+
+      auto subs52 = receiver.subscribe("Z",
+                                      [&](const ComPacket::ConstSharedPacket& packet) {
+                                        deserialise(packet, state.Z);
+                                        ipu_utils::logger()->trace("Z new value: {}", state.Z);
+                                        stateUpdated = true;
+                                      });
+
+      auto subs61 = receiver.subscribe("lambda1",
+                                      [&](const ComPacket::ConstSharedPacket& packet) {
+                                        deserialise(packet, state.lambda1);
+                                        ipu_utils::logger()->trace("lambda1 new value: {}", state.lambda1);
+                                        stateUpdated = true;
+                                      });
+
+      auto subs71 = receiver.subscribe("lambda2",
+                                      [&](const ComPacket::ConstSharedPacket& packet) {
+                                        deserialise(packet, state.lambda2);
+                                        ipu_utils::logger()->trace("lambda2 new value: {}", state.lambda2);
+                                        stateUpdated = true;
+                                      });
+
       auto subs6 = receiver.subscribe("fov",
                                       [&](const ComPacket::ConstSharedPacket& packet) {
                                         deserialise(packet, state.fov);
@@ -183,6 +223,11 @@ public:
     float envRotationDegrees = 0.f;
     float exposure = 0.f;
     float gamma = 2.2f;
+    float X = 640.f;
+    float Y = 360.f;
+    float Z = 1.f;
+    float lambda1 = 1.f;
+    float lambda2 = 1.f;
     float fov = 90.f;
     std::string device = "cpu";
     bool stop = false;

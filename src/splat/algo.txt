@@ -1,0 +1,39 @@
+
+
+implement the following changes in order:
+
+- initialise CPU frambuffer to black image
+- connect the outVertex readStream to the CPU framebuffer
+- change getProjectedPoints to getFramebuffer
+- comment out the CPU cpu_rasteriser splatPoints function
+
+- change the READING of output slices to be square extents,
+    we need to ensure that any pixels that are rasterised on a 
+    tile correspond to a square region on the framebuffer.
+
+- make sure the out slices are correctly divided. There will be a 
+    different number of pixels to points. So we need to have different size
+    slices out.
+
+- choose some square extent for points on tile
+
+- rasterise to vertsOut based on tileID with the assumption that 
+    vertsOut corresponds to a square of the framebuffer. Needs to
+    be written to as a square within the vertex code.
+     
+     vertsOut.size() // tu
+
+
+
+
+
+xy -> fb pixel
+fb pixel -> xy 
+xy -> local pixel (tile)
+local pixel (tile) -> xy
+
+1. give the points a square extent
+2. refactor viewport to do all coordinate transforms (above)
+3. sort the points so they exhibit better spacial locality.
+4. get the histogram to display point distribution and timing info
+
