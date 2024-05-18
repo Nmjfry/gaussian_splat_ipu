@@ -4,6 +4,13 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include </home/nf20/workspace/gaussian_splat_ipu/include/math/sincos.hpp>
+
+// #ifdef __IPU__
+// #else 
+//   #include <sincos.hpp>
+// #endif
+
 namespace splat {
 
 struct ivec4 {
@@ -246,8 +253,8 @@ struct Gaussian2D {
 
   Bounds2f GetBoundingBox() const {
     auto [e1, e2, theta] = ComputeEigenvalues();
-    auto c = glm::cos(theta);
-    auto s =  glm::sin(theta);
+    float c, s;
+    sincos(theta, s, c);
     auto dd = (e1 / 2) * (e1 / 2);
     auto DD = (e2 / 2) * (e2 / 2);
     auto dxMax = glm::sqrt(dd * (c * c) + DD * (s * s));
@@ -259,8 +266,8 @@ struct Gaussian2D {
   bool inside(float x, float y) const {
     auto es = ComputeEigenvalues();
     auto theta = es.z;
-    auto c = glm::cos(theta);
-    auto s =  glm::sin(theta);
+    float c, s;
+    sincos(theta, s, c);
     auto e1 = es.x;
     auto e2 = es.y;
     auto dd = (e1 / 2) * (e1 / 2);
@@ -276,9 +283,9 @@ class Gaussian3D {
   public:
     ivec4 mean; // in world space
     ivec4 colour; // RGBA colour space
-    float gid;
-    ivec3 scale;
     ivec4 rot;  // local rotation of gaussian (real, i, j, k)
+    ivec3 scale;
+    float gid;
 
     // convert from (scale, rot) into the gaussian covariance matrix in world space
     // See 3d Gaussian Splat paper for more info

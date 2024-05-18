@@ -49,8 +49,6 @@ public:
 
   poplar::InOut<poplar::Vector<float>> stored;
 
-  bool init;
-
   unsigned toByteBufferIndex(float x, float y) {
     return unsigned(x + y * IPU_TILEWIDTH) * 4;
   } 
@@ -84,39 +82,27 @@ public:
     return c;
   }
 
-  // bool tileContainsBoundary(Primitive &p, const Bounds2f& tb) {
-  //   return (p.inside(tb.min.x, tb.min.y) || p.inside(tb.min.x, tb.max.y) || p.inside(tb.max.x, tb.min.y) || p.inside(tb.max.x, tb.max.y));
-  // }
-
   bool insertAt(poplar::Vector<float> &buffer, unsigned idx, const Gaussian3D& g) {
-    if (idx + 16 > buffer.size()) {
+    if (idx + sizeof(Gaussian3D) > buffer.size()) {
       return false;
     }
-    memcpy(&buffer[idx], &g.mean, sizeof(g.mean));
-    memcpy(&buffer[idx+4], &g.colour, sizeof(g.colour));
-    memcpy(&buffer[idx+8], &g.gid, sizeof(g.gid));
-    memcpy(&buffer[idx+9], &g.scale, sizeof(g.scale));
-    memcpy(&buffer[idx+12], &g.rot, sizeof(g.rot));
+    memcpy(&buffer[idx], &g, sizeof(g));
     return true;
   }
 
   bool insertAt(poplar::InOut<poplar::Vector<float>> &buffer, unsigned idx, const Gaussian3D& g) {
-    if (idx + 16 > buffer.size()) {
+    if (idx + sizeof(Gaussian3D) > buffer.size()) {
       return false;
     }
-    memcpy((void *) &buffer[idx], &g.mean, sizeof(g.mean));
-    memcpy((void *) &buffer[idx+4], &g.colour, sizeof(g.colour));
-    memcpy((void *) &buffer[idx+8], &g.gid, sizeof(g.gid));
-    memcpy((void *) &buffer[idx+9], &g.scale, sizeof(g.scale));
-    memcpy((void *) &buffer[idx+12], &g.rot, sizeof(g.rot));
+    memcpy(&buffer[idx], &g, sizeof(g));
     return true;
   }
 
   bool insert(poplar::InOut<poplar::Vector<float>> &buffer, const Gaussian3D& g) {
     unsigned idx = buffer.size();
-    for (auto i = 0; i < buffer.size(); i+=16) {
+    for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
       float gid;
-      memcpy(&gid, &buffer[i+8], sizeof(gid)); // TODO: specify gid
+      memcpy(&gid, &buffer[i+15], sizeof(gid)); // TODO: specify gid
       if (gid == g.gid) {
         return false;
       }
@@ -129,9 +115,9 @@ public:
 
   bool insert(poplar::Vector<float> &buffer, const Gaussian3D& g) {
     unsigned idx = buffer.size();
-    for (auto i = 0; i < buffer.size(); i+=16) {
+    for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
       float gid;
-      memcpy(&gid, &buffer[i+8], sizeof(gid)); // TODO: specify gid
+      memcpy(&gid, &buffer[i+15], sizeof(gid)); // TODO: specify gid
       if (gid == g.gid) {
         return insertAt(buffer, i, g);
       }
@@ -145,48 +131,14 @@ public:
   // TODO: change to use templates instead of inheritance as virtual function insert 
   // vtable pointer so unpacking structs needs to be shifted by 1
   Gaussian3D unpackGaussian3D(poplar::InOut<poplar::Vector<float>> &buffer, unsigned idx, const glm::mat4& viewmatrix, const splat::Viewport& vp) {
-
-    ivec4 mean;
-    memcpy(&mean, &buffer[idx], sizeof(mean));
-    ivec4 colour;
-    memcpy(&colour, &buffer[idx+4], sizeof(colour));
-    float gid;
-    memcpy(&gid, &buffer[idx+8], sizeof(gid));
-    ivec3 scale;
-    memcpy(&scale, &buffer[idx+9], sizeof(scale));
-    ivec4 rot;
-    memcpy(&rot, &buffer[idx+12], sizeof(rot));
-
     struct Gaussian3D g;
-    g.mean = mean;
-    g.scale = scale; 
-    g.rot = rot;
-    g.colour = colour;
-    g.gid = gid;
-
+    memcpy(&g, &buffer[idx], sizeof(g));
     return g;
   }
 
   Gaussian3D unpackGaussian3D(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx, const glm::mat4& viewmatrix, const splat::Viewport& vp) {
-
-    ivec4 mean;
-    memcpy(&mean, &buffer[idx], sizeof(mean));
-    ivec4 colour;
-    memcpy(&colour, &buffer[idx+4], sizeof(colour));
-    float gid;
-    memcpy(&gid, &buffer[idx+8], sizeof(gid));
-    ivec3 scale;
-    memcpy(&scale, &buffer[idx+9], sizeof(scale));
-    ivec4 rot;
-    memcpy(&rot, &buffer[idx+12], sizeof(rot));
-
     struct Gaussian3D g;
-    g.mean = mean;
-    g.scale = scale; 
-    g.rot = rot;
-    g.colour = colour;
-    g.gid = gid;
-
+    memcpy(&g, &buffer[idx], sizeof(g));
     return g;
   }
 
@@ -275,7 +227,7 @@ public:
     const auto tb = tfb.getTileBounds(tile_id[0]);
     const auto centre = tb.centroid();
 
-    for (auto i = 0; i < vertsIn.size(); i+=16) {
+    for (auto i = 0; i < vertsIn.size(); i+=sizeof(Gaussian3D)) {
       Gaussian3D g = unpackGaussian3D(vertsIn, i, viewmatrix, vp);
       if (g.gid <= 0) {
         break;
@@ -361,7 +313,7 @@ public:
     const auto tbPrev = tfb.getTileBounds(tfb.getNearbyTile(tile_id[0], recievedFrom));
 
     // Iterate over the input channel and unpack the Gaussian3D structs
-    for (auto i = 0; i < bufferIn.size(); i+=16) {
+    for (auto i = 0; i < bufferIn.size(); i+=sizeof(Gaussian3D)) {
       Gaussian3D g = unpackGaussian3D(bufferIn, i, viewmatrix, vp);
       if (g.gid == 0) {
         // gid 0 if the place in the buffer is not occupied,
@@ -399,10 +351,10 @@ public:
 
       // the gaussian is being propagated away from the anchor,
       // we need to render and pass it on until the extent is fully rendered.
-      directions sendTo;
-      auto bb = g2D.GetBoundingBox().clip(tb, sendTo);
+      auto bb = g2D.GetBoundingBox();
 
       if (bb.diagonal().length() < tb.diagonal().length() * 5) {
+        directions sendTo;
         auto clippedBB = bb.clip(tb, sendTo);
         auto count = rasterise(g2D, clippedBB, tb);
         if (!gaussianProtocol(g, sendTo, recievedFrom)) {
@@ -420,20 +372,18 @@ public:
     // zero the framebuffer and clear the send buffers
     colourFb({0.0f, 0.0f, 0.0f, 0.0f}, workerId);
 
-    const unsigned GAUSSIAN3D_SIZE = 16;
-    const auto startIndex = GAUSSIAN3D_SIZE * workerId;
-
     //clear all of the out buffers:
-    for (auto i = startIndex; i < rightOut.size(); i+=GAUSSIAN3D_SIZE * numWorkers()) {
+    const auto startIndex = sizeof(Gaussian3D) * workerId;
+    for (auto i = startIndex; i < rightOut.size(); i+=sizeof(Gaussian3D) * numWorkers()) {
       evict(rightOut, i);
     }
-    for (auto i = startIndex; i < leftOut.size(); i+=GAUSSIAN3D_SIZE * numWorkers()) {
+    for (auto i = startIndex; i < leftOut.size(); i+=sizeof(Gaussian3D) * numWorkers()) {
       evict(leftOut, i);
     }
-    for (auto i = startIndex; i < upOut.size(); i+=GAUSSIAN3D_SIZE * numWorkers()) {
+    for (auto i = startIndex; i < upOut.size(); i+=sizeof(Gaussian3D) * numWorkers()) {
       evict(upOut, i);
     }
-    for (auto i = startIndex; i < downOut.size(); i+=GAUSSIAN3D_SIZE * numWorkers()) {
+    for (auto i = startIndex; i < downOut.size(); i+=sizeof(Gaussian3D) * numWorkers()) {
       evict(downOut, i);
     }
 
@@ -444,14 +394,10 @@ public:
     const auto viewmatrix = glm::transpose(glm::make_mat4(&matrix[0]));
 
     renderMain(viewmatrix, tfb, vp);
-
     readInput(rightIn, direction::right, viewmatrix, tfb, vp);
     readInput(leftIn, direction::left, viewmatrix, tfb, vp);
     readInput(upIn, direction::up, viewmatrix, tfb, vp);
     readInput(downIn, direction::down, viewmatrix, tfb, vp);
-
-
-   
     return true;
   }
  

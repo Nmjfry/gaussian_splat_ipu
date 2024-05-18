@@ -5,7 +5,6 @@
 
 #include <ipu/ipu_utils.hpp>
 #include <poputil/TileMapping.hpp>
-#include <tileMapping/tile_config.hpp>
 #include <string>
 
 namespace splat {

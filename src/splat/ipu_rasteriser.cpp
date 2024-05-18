@@ -46,32 +46,27 @@ IpuSplatter::IpuSplatter(const Gaussians& verts, TiledFramebuffer& fb, bool noAM
     disableAMPVertices(noAMP),
     fbMapping(fb)
 {
-  hostVertices.reserve(GAUSSIAN_SIZE * verts.size());
-  printf("num verts in: %lu, elemsize: %lu \n", verts.size(), GAUSSIAN_SIZE);
-  for (const auto& v : verts) {
-    hostVertices.push_back(v.mean.x);
-    hostVertices.push_back(v.mean.y);
-    hostVertices.push_back(v.mean.z);
-    hostVertices.push_back(v.mean.w);
-    hostVertices.push_back(v.colour.x);
-    hostVertices.push_back(v.colour.y);
-    hostVertices.push_back(v.colour.z);
-    hostVertices.push_back(v.colour.w);
-    hostVertices.push_back(v.gid);
-    hostVertices.push_back(v.scale.x);
-    hostVertices.push_back(v.scale.y);
-    hostVertices.push_back(v.scale.z);
-    hostVertices.push_back(v.rot.x);
-    hostVertices.push_back(v.rot.y);
-    hostVertices.push_back(v.rot.z);
-    hostVertices.push_back(v.rot.w);
+  auto elemSize = sizeof(verts[0]);
+  hostVertices.reserve(elemSize * verts.size());
+  printf("num verts in: %lu, elemsize: %lu \n", verts.size(), elemSize);
+  
+  for (auto j = 0u; j < verts.size(); ++j) {
+    //   ivec4 mean; // in world space
+    // ivec4 colour; // RGBA colour space
+    // ivec4 rot;  // local rotation of gaussian (real, i, j, k)
+    // ivec3 scale;
+    // float gid;
+    auto gptr = (const float*)&verts[j];
+    for (auto i = 0u; i < elemSize; ++i) {
+      hostVertices.push_back(*(gptr + i));
+    }
   }
-  frameBuffer.reserve(fb.width * fb.height * GAUSSIAN_SIZE);
+
+  frameBuffer.reserve(fb.width * fb.height * 4);
   for (uint i = 0; i < fb.width * fb.height; ++i) {
-    frameBuffer.push_back(0.0);
-    frameBuffer.push_back(0.0);
-    frameBuffer.push_back(0.0);
-    frameBuffer.push_back(0.0);
+    for (auto j = 0u; j < 4; ++j) {
+      frameBuffer.push_back(0.0);
+    }
   }
   printf("Fb size: %luB\n", frameBuffer.size());
 }
@@ -221,9 +216,10 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
   const auto codeletFile = std::string(POPC_PREFIX) + "/codelets/splat/codelets.cpp";
   const auto glmPath = std::string(POPC_PREFIX) + "/external/glm/";
+  const auto mathPath = std::string(POPC_PREFIX) + "/include/math";
   const auto otherIncludes = std::string(POPC_PREFIX) + "/include/missing";
   const auto tileMapping = std::string(POPC_PREFIX) + "/include/tileMapping";
-  const auto includes = " -I " + glmPath + " -I " + otherIncludes + " -I " + tileMapping;
+  const auto includes = " -I " + glmPath + " -I " + mathPath + " -I " + otherIncludes + " -I " + tileMapping;
   ipu_utils::logger()->debug("POPC_PREFIX: {}", POPC_PREFIX);
   vg.addCodelets(codeletFile, poplar::CodeletFileType::Auto, "-O3" + includes);
 
