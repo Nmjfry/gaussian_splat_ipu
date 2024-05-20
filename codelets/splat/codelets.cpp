@@ -92,15 +92,17 @@ public:
   }
 
   // G must have a float gid as the last element
+  // return false only if the buffer is full
   template <typename G, typename Vec> bool insert(Vec &buffer, const G& g) {
     unsigned idx = buffer.size();
     for (auto i = 0; i < buffer.size(); i+=sizeof(g)) {
       float gid;
       // assumes gid is float and last element in the struct
-      size_t gidIdx = (sizeof(g) - sizeof(float)) / sizeof(float);
+      size_t gidIdx = (sizeof(g) - sizeof(gid)) / sizeof(float);
       memcpy(&gid, &buffer[i+gidIdx], sizeof(gid)); 
       if (gid == g.gid) {
-        return false;
+        // stop since the gaussian already is in the buffer
+        return true;
       }
       if (gid == 0u && i < idx) {
         idx = i;
@@ -122,33 +124,37 @@ public:
     insertAt(buffer, idx, g);
   }
 
-  template<typename G> void send(const G &g, directions dirs) {
+  template<typename G> bool send(const G &g, directions dirs) {
+    // if no dirs set then we still return true.. returning true means 
+    // the gaussian is held somewhere. Either this tile or in an out buf. in this case
+    // it will remain in vertsIn since send is never called with evict
+    bool sent = true;
     if (dirs.right) {
-      insert(rightOut, g);
+      sent = sent && insert(rightOut, g);
     }
     if (dirs.left) {
-      insert(leftOut, g);
+      sent = sent && insert(leftOut, g);
     }
     if (dirs.up) {
-      insert(upOut, g);
+      sent = sent && insert(upOut, g);
     }
     if (dirs.down) {
-      insert(downOut, g);
+      sent = sent && insert(downOut, g);
     }
+    return sent;
   }
 
-  template<typename G> void sendOnce(const G &g, direction dir) {
+  template<typename G> bool sendOnce(const G &g, direction dir) {
     if (dir == direction::right) {
-      insert(rightOut, g);
+      return insert(rightOut, g);
     } else if (dir == direction::down) {
-      insert(downOut, g);
+      return insert(downOut, g);
     } else if (dir == direction::left) {
-      insert(leftOut, g);
+      return insert(leftOut, g);
     } else if (dir == direction::up) {
-      insert(upOut, g);
-    } else {
-      insert(vertsIn, g);
+      return insert(upOut, g);
     }
+    return false;
   }
 
   void colourFb(const ivec4 &colour, unsigned workerId) {
@@ -167,10 +173,48 @@ public:
     }
   }
 
-  void colourFb(const ivec4 &colour) {
-    for (auto i = 0; i < localFb.size(); i += 4) {
-      memcpy(&localFb[i], &colour, sizeof(colour));
+  template<typename G> bool protocol(const G& g, const directions& sendTo, const direction& recievedFrom) {
+    if (recievedFrom == direction::right && sendTo.left) {
+      bool ok = sendOnce(g, direction::left);
+      if (sendTo.down) {
+        ok = ok && sendOnce(g, direction::down);
+      }
+      if (sendTo.up) {
+        ok = ok && sendOnce(g, direction::up);
+      }
+      return ok;
     }
+
+    if (recievedFrom == direction::left && sendTo.right) {
+      bool ok = sendOnce(g, direction::right);
+      if (sendTo.down) {
+        ok = ok && sendOnce(g, direction::down);
+      }
+      if (sendTo.up) {
+        ok = ok && sendOnce(g, direction::up);
+      }
+      return ok;
+    }
+
+    if (recievedFrom == direction::up && sendTo.down) {
+      return sendOnce(g, direction::down);
+    }
+
+    if (recievedFrom == direction::down && sendTo.up) {
+      return sendOnce(g, direction::up);
+    }
+
+    if (sendTo.any()) {
+      bool ok = true;
+      if (sendTo.up) {
+        ok = ok && sendOnce(g, direction::up);
+      }
+      if (sendTo.down) {
+        ok = ok && sendOnce(g, direction::down);
+      }
+      return ok;
+    }
+    return false;
   }
 
   unsigned rasterise(const Gaussian2D &g, const Bounds2f& bb, const Bounds2f& tb) {
@@ -190,14 +234,27 @@ public:
     return count;
   }
 
-  void renderMain(const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
+  template<typename InternalStorage> void renderInternal(InternalStorage& buffer, const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
     const auto tb = tfb.getTileBounds(tile_id[0]);
     const auto centre = tb.centroid();
 
-    for (auto i = 0; i < vertsIn.size(); i+=sizeof(Gaussian3D)) {
-      Gaussian3D g = unpack<Gaussian3D>(vertsIn, i);
+    for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
+      Gaussian3D g = unpack<Gaussian3D>(buffer, i);
       if (g.gid <= 0) {
         break;
+      }
+      auto col = g.colour;
+      if (col.x != 0.4f) {
+        // TODO: fix the division of vertsIn during problem setup
+        // they are slightly unevenly divided so hostVerts gets chopped wierdly
+        evict<Gaussian3D>(buffer, i);
+        continue;
+        
+        // printf("mean: %f, %f, %f, %f ", g.mean.x, g.mean.y, g.mean.z, g.mean.w);
+        // printf("colour: %f, %f, %f, %f ", col.x, col.y, col.z, col.w);
+        // printf("rot: %f, %f, %f, %f ", g.rot.x, g.rot.y, g.rot.z, g.rot.w);
+        // printf("scale: %f, %f, %f ", g.scale.x, g.scale.y, g.scale.z);
+        // printf("gid %f\n", g.gid);
       }
 
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
@@ -231,55 +288,17 @@ public:
         auto dstTile = tfb.pixCoordToTile(projMean.y, projMean.x);
         auto dstCentre = tfb.getTileBounds(dstTile).centroid();
         auto direction = tfb.getBestDirection(tb.centroid(), dstCentre);
-        evict<Gaussian3D>(vertsIn, i);
-        sendOnce(g, direction);
+        evict<Gaussian3D>(buffer, i);
+        bool ok = sendOnce(g, direction);
+        if (!ok) {
+          // guard against losing a gaussian
+          bool overflow = !insert(vertsIn, g);
+          if (overflow) {
+            insert(stored, g);
+          }
+        }
       }
     }
-  }
-
-  template<typename G> bool protocol(const G& g, const directions& sendTo, const direction& recievedFrom) {
-    if (recievedFrom == direction::right && sendTo.left) {
-      sendOnce(g, direction::left);
-      if (sendTo.down) {
-        sendOnce(g, direction::down);
-      }
-      if (sendTo.up) {
-        sendOnce(g, direction::up);
-      }
-      return true;
-    }
-
-    if (recievedFrom == direction::left && sendTo.right) {
-      sendOnce(g, direction::right);
-      if (sendTo.down) {
-        sendOnce(g, direction::down);
-      }
-      if (sendTo.up) {
-        sendOnce(g, direction::up);
-      }
-      return true;
-    }
-
-    if (recievedFrom == direction::up && sendTo.down) {
-      sendOnce(g, direction::down);
-      return true;
-    }
-
-    if (recievedFrom == direction::down && sendTo.up) {
-      sendOnce(g, direction::up);
-      return true;
-    }
-
-    if (sendTo.any()) {
-      if (sendTo.up) {
-        sendOnce(g, direction::up);
-      }
-      if (sendTo.down) {
-        sendOnce(g, direction::down);
-      }
-      return true;
-    }
-    return false;
   }
 
   void readInput(poplar::Input<poplar::Vector<float>> &bufferIn,
@@ -294,12 +313,14 @@ public:
     // Iterate over the input channel and unpack the Gaussian3D structs
     for (auto i = 0; i < bufferIn.size(); i+=sizeof(Gaussian3D)) {
       Gaussian3D g = unpack<Gaussian3D>(bufferIn, i);
-      if (g.gid == 0) {
+      if (g.gid <= 0) {
         // gid 0 if the place in the buffer is not occupied,
         // since the channels are filled from the front we can break
         // when we hit an empty slot
         break;
       }
+
+      // addBG(getTileColour());
 
       // project the 3D gaussian into 2D using EWA splatting algorithm
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
@@ -308,7 +329,10 @@ public:
       if (tb.contains(ivec2{projMean.x, projMean.y})) {
         // anchor arrived so we insert and let
         // render main handle the rest
-        insert(vertsIn, g);
+        bool overflow = !insert(vertsIn, g);
+        if (overflow) {
+          insert(stored, g);
+        }
         continue;
       } 
 
@@ -325,7 +349,16 @@ public:
 
       if (curDist < prevDist) {
         auto direction = tfb.getBestDirection(curCentre, dstCentre);
-        sendOnce(g, direction);
+        bool ok = sendOnce(g, direction);
+        if (!ok) {
+          // guard against losing a gaussian
+          // we get here if the out buffer is full but the 
+          // gaussian is in transit to another tile
+          bool overflow = !insert(vertsIn, g);
+          if (overflow) {
+            insert(stored, g);
+          }
+        }
         continue;
       }
 
@@ -337,10 +370,13 @@ public:
         directions sendTo;
         auto clippedBB = bb.clip(tb, sendTo);
         auto count = rasterise(g2D, clippedBB, tb);
-        if (!protocol<Gaussian3D>(g, sendTo, recievedFrom)) {
+        bool ok = protocol<Gaussian3D>(g, sendTo, recievedFrom);
+        if (!ok) {
           // guard against losing a gaussian
-          // should only get here in very specific cases
-          insert(vertsIn, g);
+          bool overflow = !insert(vertsIn, g);
+          if (overflow) {
+            insert(stored, g);
+          }
         }
       }
     }
@@ -377,7 +413,9 @@ public:
     readInput(leftIn, direction::left, viewmatrix, tfb, vp);
     readInput(upIn, direction::up, viewmatrix, tfb, vp);
     readInput(downIn, direction::down, viewmatrix, tfb, vp);
-    renderMain(viewmatrix, tfb, vp);
+    renderInternal(vertsIn, viewmatrix, tfb, vp);
+    renderInternal(stored, viewmatrix, tfb, vp);
+
     return true;
   }
  

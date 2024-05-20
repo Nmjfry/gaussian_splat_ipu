@@ -299,7 +299,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
       auto sliceFb = paddedFramebuffer.slice(mFb.front());
 
-      auto stored = vg.addVariable(poplar::FLOAT, {channelSize});
+      auto stored = vg.addVariable(poplar::FLOAT, {channelSize * 8});
       vg.setTileMapping(stored, t);
 
       auto v = vg.addVertex(splatCs, "Transform4x4");

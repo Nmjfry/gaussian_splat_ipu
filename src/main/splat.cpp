@@ -121,13 +121,13 @@ int main(int argc, char** argv) {
   // make fb.numTiles copies of a 2D gaussian
   splat::Gaussians gsns;
   ipu_utils::logger()->info("Generating {} gaussians", pts.size());
-  for (std::size_t i = 0; i < pts.size(); ++i) {
+  for (std::size_t i = 0; i < pts.size(); i+=20) {
     auto pt = pts[i].p;
     splat::Gaussian3D g;
-    g.colour = {.4f, 0.f, .1f, 0.9f};
     g.mean = {pt.x, pt.y, pt.z, 1.f};
-    g.gid = (float) i+1;
+    g.colour = {.4f, 0.f, .1f, 0.9f};
     g.scale = {.2f, .2f, .2f};
+    g.gid = ((float) i)+1.f;
     gsns.push_back(g);
   }
 
@@ -149,7 +149,7 @@ int main(int argc, char** argv) {
   }
 
   // Set up the modelling and projection transforms in an OpenGL compatible way:
-  auto modelView = splat::lookAtBoundingBox(bb, glm::vec3(0.f , 1.f, 0.f), 1.5f);
+  auto modelView = splat::lookAtBoundingBox(bb, glm::vec3(0.f , 1.f, 0.f), 3.f);
 
   // Transform the BB to camera/eye space:
   splat::Bounds3f bbInCamera(
