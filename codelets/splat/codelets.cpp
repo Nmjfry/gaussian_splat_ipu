@@ -237,7 +237,7 @@ public:
     }
   }
 
-  template<typename G> bool gaussianProtocol(const G& g, const directions& sendTo, const direction& recievedFrom) {
+  template<typename G> bool protocol(const G& g, const directions& sendTo, const direction& recievedFrom) {
     if (recievedFrom == direction::right && sendTo.left) {
       sendOnce(g, direction::left);
       if (sendTo.down) {
@@ -337,7 +337,7 @@ public:
         directions sendTo;
         auto clippedBB = bb.clip(tb, sendTo);
         auto count = rasterise(g2D, clippedBB, tb);
-        if (!gaussianProtocol(g, sendTo, recievedFrom)) {
+        if (!protocol<Gaussian3D>(g, sendTo, recievedFrom)) {
           // guard against losing a gaussian
           // should only get here in very specific cases
           insert(vertsIn, g);
