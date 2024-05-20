@@ -83,27 +83,22 @@ public:
     return c;
   }
 
-  bool insertAt(poplar::Vector<float> &buffer, unsigned idx, const Gaussian3D& g) {
-    if (idx + sizeof(Gaussian3D) > buffer.size()) {
+  template <typename G, typename Vec> bool insertAt(Vec &buffer, unsigned idx, const G& g) {
+    if (idx + sizeof(g) > buffer.size()) {
       return false;
     }
     memcpy(&buffer[idx], &g, sizeof(g));
     return true;
   }
 
-  bool insertAt(poplar::InOut<poplar::Vector<float>> &buffer, unsigned idx, const Gaussian3D& g) {
-    if (idx + sizeof(Gaussian3D) > buffer.size()) {
-      return false;
-    }
-    memcpy(&buffer[idx], &g, sizeof(g));
-    return true;
-  }
-
-  bool insert(poplar::InOut<poplar::Vector<float>> &buffer, const Gaussian3D& g) {
+  // G must have a float gid as the last element
+  template <typename G, typename Vec> bool insert(Vec &buffer, const G& g) {
     unsigned idx = buffer.size();
-    for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
+    for (auto i = 0; i < buffer.size(); i+=sizeof(g)) {
       float gid;
-      memcpy(&gid, &buffer[i+15], sizeof(gid)); // TODO: specify gid
+      // assumes gid is float and last element in the struct
+      size_t gidIdx = (sizeof(g) - sizeof(float)) / sizeof(float);
+      memcpy(&gid, &buffer[i+gidIdx], sizeof(gid)); 
       if (gid == g.gid) {
         return false;
       }
@@ -111,52 +106,23 @@ public:
         idx = i;
       }
     }
-    return insertAt(buffer, idx, g);
+    return insertAt<G, Vec>(buffer, idx, g);
   }
 
-  bool insert(poplar::Vector<float> &buffer, const Gaussian3D& g) {
-    unsigned idx = buffer.size();
-    for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
-      float gid;
-      memcpy(&gid, &buffer[i+15], sizeof(gid)); // TODO: specify gid
-      if (gid == g.gid) {
-        return insertAt(buffer, i, g);
-      }
-      if (gid == 0u && i < idx) {
-        idx = i;
-      }
-    }
-    return insertAt(buffer, idx, g);
-  }
-
-  // TODO: change to use templates instead of inheritance as virtual function insert 
-  // vtable pointer so unpacking structs needs to be shifted by 1
-  Gaussian3D unpackGaussian3D(poplar::InOut<poplar::Vector<float>> &buffer, unsigned idx) {
-    struct Gaussian3D g;
+  template<typename G, typename Vec> G unpack(Vec &buffer, unsigned idx) {
+    G g;
     memcpy(&g, &buffer[idx], sizeof(g));
     return g;
   }
 
-  Gaussian3D unpackGaussian3D(poplar::Input<poplar::Vector<float>> &buffer, unsigned idx) {
-    struct Gaussian3D g;
-    memcpy(&g, &buffer[idx], sizeof(g));
-    return g;
-  }
-
-    // invalidate a gaussian in the buffer
-  void evict(poplar::Vector<float> &buffer, unsigned idx) {
-    Gaussian3D g;
+  // invalidate a gaussian in the buffer
+  template<typename G, typename Vec> void evict(Vec &buffer, unsigned idx) {
+    G g;
     g.gid = 0.f;
     insertAt(buffer, idx, g);
   }
 
-  void evict(poplar::InOut<poplar::Vector<float>> &buffer, unsigned idx) {
-    Gaussian3D g;
-    g.gid = 0.f;
-    insertAt(buffer, idx, g);
-  }
-
-  void send(Gaussian3D &g, directions dirs) {
+  template<typename G> void send(const G &g, directions dirs) {
     if (dirs.right) {
       insert(rightOut, g);
     }
@@ -171,7 +137,7 @@ public:
     }
   }
 
-  void sendOnce(const Gaussian3D &g, direction dir) {
+  template<typename G> void sendOnce(const G &g, direction dir) {
     if (dir == direction::right) {
       insert(rightOut, g);
     } else if (dir == direction::down) {
@@ -229,7 +195,7 @@ public:
     const auto centre = tb.centroid();
 
     for (auto i = 0; i < vertsIn.size(); i+=sizeof(Gaussian3D)) {
-      Gaussian3D g = unpackGaussian3D(vertsIn, i);
+      Gaussian3D g = unpack<Gaussian3D>(vertsIn, i);
       if (g.gid <= 0) {
         break;
       }
@@ -237,7 +203,7 @@ public:
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
       auto clipSpace = viewmatrix * glmMean;
       // perform frustum culling
-      if (clipSpace.z < 0.2f) {
+      if (clipSpace.z > 0.f) {
         continue;
       }
 
@@ -265,13 +231,13 @@ public:
         auto dstTile = tfb.pixCoordToTile(projMean.y, projMean.x);
         auto dstCentre = tfb.getTileBounds(dstTile).centroid();
         auto direction = tfb.getBestDirection(tb.centroid(), dstCentre);
-        evict(vertsIn, i);
+        evict<Gaussian3D>(vertsIn, i);
         sendOnce(g, direction);
       }
     }
   }
 
-  bool gaussianProtocol(const Gaussian3D& g, const directions& sendTo, const direction& recievedFrom) {
+  template<typename G> bool gaussianProtocol(const G& g, const directions& sendTo, const direction& recievedFrom) {
     if (recievedFrom == direction::right && sendTo.left) {
       sendOnce(g, direction::left);
       if (sendTo.down) {
@@ -327,7 +293,7 @@ public:
 
     // Iterate over the input channel and unpack the Gaussian3D structs
     for (auto i = 0; i < bufferIn.size(); i+=sizeof(Gaussian3D)) {
-      Gaussian3D g = unpackGaussian3D(bufferIn, i);
+      Gaussian3D g = unpack<Gaussian3D>(bufferIn, i);
       if (g.gid == 0) {
         // gid 0 if the place in the buffer is not occupied,
         // since the channels are filled from the front we can break
@@ -389,16 +355,16 @@ public:
     //clear all of the out buffers:
     const auto startIndex = sizeof(Gaussian3D) * workerId;
     for (auto i = startIndex; i < rightOut.size(); i+=sizeof(Gaussian3D) * numWorkers()) {
-      evict(rightOut, i);
+      evict<Gaussian3D>(rightOut, i);
     }
     for (auto i = startIndex; i < leftOut.size(); i+=sizeof(Gaussian3D) * numWorkers()) {
-      evict(leftOut, i);
+      evict<Gaussian3D>(leftOut, i);
     }
     for (auto i = startIndex; i < upOut.size(); i+=sizeof(Gaussian3D) * numWorkers()) {
-      evict(upOut, i);
+      evict<Gaussian3D>(upOut, i);
     }
     for (auto i = startIndex; i < downOut.size(); i+=sizeof(Gaussian3D) * numWorkers()) {
-      evict(downOut, i);
+      evict<Gaussian3D>(downOut, i);
     }
 
     // construct mapping from tile to framebuffer
