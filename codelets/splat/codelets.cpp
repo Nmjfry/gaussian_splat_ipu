@@ -30,7 +30,9 @@ using namespace splat;
 class Transform4x4 : public poplar::MultiVertex {
 public:
   poplar::Input<poplar::Vector<float>> matrix;
+  
   poplar::InOut<poplar::Vector<float>> vertsIn;
+  poplar::InOut<poplar::Vector<float>> stored;
 
   poplar::Output<poplar::Vector<float>> localFb;
   poplar::Input<poplar::Vector<int>> tile_id;
@@ -47,7 +49,6 @@ public:
   poplar::Input<poplar::Vector<float>> downIn;
   poplar::Output<poplar::Vector<float>> downOut;
 
-  poplar::InOut<poplar::Vector<float>> stored;
 
   unsigned toByteBufferIndex(float x, float y) {
     return unsigned(x + y * IPU_TILEWIDTH) * 4;
@@ -233,28 +234,40 @@ public:
         break;
       }
 
-      ivec3 cov2D = g.ComputeCov2D(viewmatrix, tfb.width / 2, tfb.height / 2);
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
-      auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
-      Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
+      auto clipSpace = viewmatrix * glmMean;
+      // perform frustum culling
+      if (clipSpace.z < 0.2f) {
+        continue;
+      }
 
-      if (tb.contains(g2D.mean)) {
+      auto projMean = vp.clipSpaceToViewport(clipSpace);
+      bool anchored = tb.contains(ivec2{projMean.x, projMean.y});
+
+      // TODO:
+      // 1. send if not anchored 
+      // 2. store the clip depth in a seperate z-buffer
+      // 3. use the z-buffer to sort the gaussians
+      // 4. in a seperate loop render the gaussians in order
+
+      if (anchored) {
+        // TODO: extract into separate loop post sorting
         directions dirs;
+        ivec3 cov2D = g.ComputeCov2D(viewmatrix, tfb.width / 2, tfb.height / 2);
+        Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
         auto bb = g2D.GetBoundingBox();
         if (bb.diagonal().length() < tb.diagonal().length() * 5) {
           bb = bb.clip(tb, dirs);
           rasterise(g2D, bb, tb);
           send(g, dirs);
         }
-        continue;
-      } 
-
-      auto dstTile = tfb.pixCoordToTile(g2D.mean.y, g2D.mean.x);
-      auto dstCentre = tfb.getTileBounds(dstTile).centroid();
-      auto direction = tfb.getBestDirection(tb.centroid(), dstCentre);
-
-      evict(vertsIn, i);
-      sendOnce(g, direction);
+      } else {
+        auto dstTile = tfb.pixCoordToTile(projMean.y, projMean.x);
+        auto dstCentre = tfb.getTileBounds(dstTile).centroid();
+        auto direction = tfb.getBestDirection(tb.centroid(), dstCentre);
+        evict(vertsIn, i);
+        sendOnce(g, direction);
+      }
     }
   }
 
@@ -325,15 +338,16 @@ public:
       // project the 3D gaussian into 2D using EWA splatting algorithm
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
       auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
-      ivec3 cov2D = g.ComputeCov2D(viewmatrix, tfb.width / 2, tfb.height / 2);
-      Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
-
-      if (tb.contains(g2D.mean)) {
+   
+      if (tb.contains(ivec2{projMean.x, projMean.y})) {
         // anchor arrived so we insert and let
         // render main handle the rest
         insert(vertsIn, g);
         continue;
       } 
+
+      ivec3 cov2D = g.ComputeCov2D(viewmatrix, tfb.width / 2, tfb.height / 2);
+      Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
 
       auto dstTile = tfb.pixCoordToTile(g2D.mean.y, g2D.mean.x);
       ivec2 dstCentre = tfb.getTileBounds(dstTile).centroid();
@@ -393,11 +407,11 @@ public:
     // Transpose because GLM storage order is column major:
     const auto viewmatrix = glm::transpose(glm::make_mat4(&matrix[0]));
 
-    renderMain(viewmatrix, tfb, vp);
     readInput(rightIn, direction::right, viewmatrix, tfb, vp);
     readInput(leftIn, direction::left, viewmatrix, tfb, vp);
     readInput(upIn, direction::up, viewmatrix, tfb, vp);
     readInput(downIn, direction::down, viewmatrix, tfb, vp);
+    renderMain(viewmatrix, tfb, vp);
     return true;
   }
  

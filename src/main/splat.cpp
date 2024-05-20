@@ -149,7 +149,7 @@ int main(int argc, char** argv) {
   }
 
   // Set up the modelling and projection transforms in an OpenGL compatible way:
-  auto modelView = splat::lookAtBoundingBox(bb, glm::vec3(0.f , 1.f, 0.f), 1.f);
+  auto modelView = splat::lookAtBoundingBox(bb, glm::vec3(0.f , 1.f, 0.f), 1.5f);
 
   // Transform the BB to camera/eye space:
   splat::Bounds3f bbInCamera(
@@ -161,7 +161,7 @@ int main(int argc, char** argv) {
   auto projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
   auto cameraTranslation = glm::mat4x4(1.f);
 
-  ipuSplatter->updateModelViewProjection(modelView * projection);
+  ipuSplatter->updateModelViewProjection(projection * modelView);
   gm.prepareEngine();
 
   std::vector<glm::vec4> clipSpace;
