@@ -74,11 +74,11 @@ public:
   ivec4 getTileColour() {
     ivec4 c;
     if (tile_id[0] % 3 == 0) {
-      c = {.3f, 0.0f, 0.0f, 0.0f};
+      c = {.1f, 0.0f, 0.0f, 0.0f};
     } else if (tile_id[0] % 3 == 1) {
-      c = {0.0f, .3f, 0.0f, 0.0f};
+      c = {0.0f, .1f, 0.0f, 0.0f};
     } else {
-      c = {0.0f, 0.0f, .3f, 0.0f};
+      c = {0.0f, 0.0f, .1f, 0.0f};
     }
     return c;
   }
@@ -243,20 +243,6 @@ public:
       if (g.gid <= 0) {
         break;
       }
-      auto col = g.colour;
-      if (col.x != 0.4f) {
-        // TODO: fix the division of vertsIn during problem setup
-        // they are slightly unevenly divided so hostVerts gets chopped wierdly
-        evict<Gaussian3D>(buffer, i);
-        continue;
-        
-        // printf("mean: %f, %f, %f, %f ", g.mean.x, g.mean.y, g.mean.z, g.mean.w);
-        // printf("colour: %f, %f, %f, %f ", col.x, col.y, col.z, col.w);
-        // printf("rot: %f, %f, %f, %f ", g.rot.x, g.rot.y, g.rot.z, g.rot.w);
-        // printf("scale: %f, %f, %f ", g.scale.x, g.scale.y, g.scale.z);
-        // printf("gid %f\n", g.gid);
-      }
-
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
       auto clipSpace = viewmatrix * glmMean;
       // perform frustum culling
@@ -386,7 +372,7 @@ public:
   bool compute(unsigned workerId) {
 
     // zero the framebuffer and clear the send buffers
-    colourFb({0.0f, 0.0f, 0.0f, 0.0f}, workerId);
+    colourFb(getTileColour(), workerId);
 
     //clear all of the out buffers:
     const auto startIndex = sizeof(Gaussian3D) * workerId;
