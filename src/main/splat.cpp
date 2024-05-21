@@ -121,7 +121,7 @@ int main(int argc, char** argv) {
   // make fb.numTiles copies of a 2D gaussian
   splat::Gaussians gsns;
   ipu_utils::logger()->info("Generating {} gaussians", pts.size());
-  for (std::size_t i = 0; i < pts.size(); i+=20) {
+  for (std::size_t i = 0; i < pts.size(); i+=150) {
     auto pt = pts[i].p;
     splat::Gaussian3D g;
     g.mean = {pt.x, pt.y, pt.z, 1.f};

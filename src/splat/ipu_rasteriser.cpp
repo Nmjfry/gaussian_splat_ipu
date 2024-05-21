@@ -133,7 +133,7 @@ struct MappingInfo {
 };
 
 MappingInfo calculateMapping(poplar::Graph& g, std::size_t numElements, std::size_t grainSize, TiledFramebuffer &fbMapping) {
-  ipu_utils::logger()->info("Input size of pts: {}B", numElements);
+  ipu_utils::logger()->info("Input size of data: {}B", numElements);
   const double numTiles = g.getTarget().getNumTiles();
 
   if (fbMapping.numTiles < numTiles) {
@@ -143,19 +143,24 @@ MappingInfo calculateMapping(poplar::Graph& g, std::size_t numElements, std::siz
   double grainsPerTile = std::ceil(numElements / (fbMapping.numTiles * grainSize));
   double elementsPerTile = grainsPerTile * grainSize;
   double fullTiles = std::floor(numElements / elementsPerTile);
+  double unfilledTiles = fbMapping.numTiles - fullTiles;
   double remainingElements = numElements - (fullTiles * elementsPerTile);
   double paddedRemainder = std::ceil(remainingElements / grainSize) * grainSize;
 
-  fullTiles = fullTiles > 1439 ? 1439 : fullTiles;
+  auto totalTiles = fullTiles + unfilledTiles;
+  totalTiles = totalTiles > 1439 ? 1439 : totalTiles;
 
   ipu_utils::logger()->info("Upper bound elements per tile: {}", elementsPerTile);
   ipu_utils::logger()->info("Full tiles: {}", fullTiles);
+  ipu_utils::logger()->info("Unfilled tiles: {}", unfilledTiles);
   ipu_utils::logger()->info("Remaining elements: {}", remainingElements);
-  ipu_utils::logger()->info("Padded elements on last tile: {}", paddedRemainder);
+  ipu_utils::logger()->info("Padded elements on last used tile: {}", paddedRemainder);
   ipu_utils::logger()->info("Padding: {}", paddedRemainder - remainingElements);
+  ipu_utils::logger()->info("Total padding to fill all tiles: {}", paddedRemainder - remainingElements + (unfilledTiles * elementsPerTile));
+  ipu_utils::logger()->info("Total tiles: {}", totalTiles);
 
-  const std::size_t padding = paddedRemainder - remainingElements;
-  return MappingInfo{padding, std::size_t(elementsPerTile), std::size_t(fullTiles)};
+  const std::size_t padding = paddedRemainder - remainingElements + (unfilledTiles * elementsPerTile);
+  return MappingInfo{padding, std::size_t(elementsPerTile), std::size_t(totalTiles)};
 }
 
 
@@ -234,36 +239,21 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
   auto fbGrainSize = 4;
   auto fbToTileMapping = calculateMapping(vg, frameBuffer.size(), fbGrainSize, fbMapping);
-  printf("Framebuffer layout: %lu, %lu, %lu\n", fbToTileMapping.padding, fbToTileMapping.elementsPerTile, fbToTileMapping.totalTiles);
+  ipu_utils::logger()->info("Framebuffer layout: padding: {}, elementsPerTile: {}, totalTiles: {}", fbToTileMapping.padding, fbToTileMapping.elementsPerTile, fbToTileMapping.totalTiles);
   auto paddedFramebuffer = vg.addVariable(FLOAT, {frameBuffer.size() + fbToTileMapping.padding}, "padded_frame_buffer");
   applyTileMapping(vg, paddedFramebuffer, fbToTileMapping);
-  
   outputFramebuffer = paddedFramebuffer.slice(0, frameBuffer.size());
 
   // Map the point cloud vertices across all tiles. TODO: If we are not using AMP the only constraint
   // is that the grain size must be a multiple of 4 (so that 4-vectors are not split between
   // tiles). If we use the AMP we need to have at least 8 4-vectors to fill the AMP pipeline so
   // the minimum grain size is 32:
-  const auto grainSize = 4; //disableAMPVertices ? 4 : 4 * 8;
-
-  // MappingInfo{padding, std::size_t(elementsPerTile), std::size_t(fullTiles)};
-
-  printf("hostvertices size: %lu, numtiles %f\n", hostVertices.size(), fbMapping.numTiles);
-  auto numElemsPerTile = std::floor(hostVertices.size() / fbMapping.numTiles); // lower bound
-  auto remainingElements = hostVertices.size() - (numElemsPerTile * fbMapping.numTiles);
-  auto paddedRemainder = std::ceil(remainingElements / grainSize) * grainSize;
-  auto padding = paddedRemainder - remainingElements;
-
-  printf("numElemsPerTile: %f, remainingElements : %f, padding: %f\n", numElemsPerTile, remainingElements, padding);
-  auto mapping = MappingInfo{std::size_t(padding), std::size_t(numElemsPerTile), std::size_t(fbMapping.numTiles)};
-  
-  mapping.totalTiles = mapping.totalTiles > 1439 ? 1439 : mapping.totalTiles;
-
-  // auto mapping = calculateMapping(vg, hostVertices.size(), grainSize, fbMapping);
-  printf("Vertex layout: %lu, %lu, %lu\n", mapping.padding, mapping.elementsPerTile, mapping.totalTiles);
+  ipu_utils::logger()->info("hostvertices size: {}, numtiles {}", hostVertices.size(), fbToTileMapping.totalTiles);
+  const auto grainSize = sizeof(Gaussian3D); //disableAMPVertices ? 4 : 4 * 8;
+  auto mapping = calculateMapping(vg, hostVertices.size(), grainSize, fbMapping);
+  ipu_utils::logger()->info("Vertex layout: padding: {}, elementsPerTile: {}, totalTiles: {}", mapping.padding, mapping.elementsPerTile, mapping.totalTiles);
   auto paddedInput = vg.addVariable(FLOAT, {hostVertices.size() + mapping.padding}, "padded_verts_in");
   applyTileMapping(vg, paddedInput, mapping);
-
   // We only want to stream to a slice of the padded tensor:
   inputVertices = paddedInput.slice(0, hostVertices.size());
 

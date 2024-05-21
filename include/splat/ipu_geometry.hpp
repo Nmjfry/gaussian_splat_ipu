@@ -316,7 +316,7 @@ class Gaussian3D {
       t.x = min(limx, max(-limx, txtz)) * t.z;
       t.y = min(limy, max(-limy, tytz)) * t.z;
 
-      const float focal_x = 1.5f;
+      const float focal_x = 1.7f;
       const float focal_y = 1.f;
 
       glm::mat3 J = glm::mat3(
