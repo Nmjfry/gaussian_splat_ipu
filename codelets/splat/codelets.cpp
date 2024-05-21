@@ -32,7 +32,6 @@ public:
   poplar::Input<poplar::Vector<float>> matrix;
   
   poplar::InOut<poplar::Vector<float>> vertsIn;
-  poplar::InOut<poplar::Vector<float>> stored;
 
   poplar::Output<poplar::Vector<float>> localFb;
   poplar::Input<poplar::Vector<int>> tile_id;
@@ -251,32 +250,31 @@ public:
         auto dstCentre = tfb.getTileBounds(dstTile).centroid();
         auto direction = tfb.getBestDirection(tb.centroid(), dstCentre);
         evict<Gaussian3D>(buffer, i);
-        if (sendOnce(g, direction)) {
-          continue;
+        if (!sendOnce(g, direction)) {
+          // guard against losing a gaussian
+          insertAt(vertsIn, i, g);
         }
-        // guard against losing a gaussian
-        insert(vertsIn, g);
       }
     }
   }
 
   template<typename InternalStorage> void renderInternal(InternalStorage& buffer, const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
     const auto tb = tfb.getTileBounds(tile_id[0]);
-    const auto centre = tb.centroid();
 
     for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
       Gaussian3D g = unpack<Gaussian3D>(buffer, i);
       if (g.gid <= 0) {
         break;
       }
-      glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
-      auto clipSpace = viewmatrix * glmMean;
+
+      auto clipSpace = viewmatrix * glm::vec4(g.mean.x, g.mean.y, g.mean.z, g.mean.w);
       // perform frustum culling
       if (clipSpace.z > 0.f) {
         continue;
       }
 
       auto projMean = vp.clipSpaceToViewport(clipSpace);
+
       if (tb.contains(ivec2{projMean.x, projMean.y})) {
         // TODO: extract into separate loop post sorting
         ivec3 cov2D = g.ComputeCov2D(viewmatrix, tfb.width / 2, tfb.height / 2);
@@ -285,9 +283,8 @@ public:
         if (bb.diagonal().length() < tb.diagonal().length() * 5) {
           directions dirs;
           bb = bb.clip(tb, dirs);
+          send(g, dirs);
           rasterise(g2D, bb, tb);
-
-          if (send(g, dirs)) 
         }
       } 
     }
@@ -322,9 +319,6 @@ public:
         // anchor arrived so we insert and let
         // render main handle the rest
         bool overflow = !insert(vertsIn, g);
-        if (overflow) {
-          insert(stored, g);
-        }
         continue;
       } 
 
@@ -345,9 +339,7 @@ public:
           // guard against losing a gaussian
           // we get here if the out buffer is full but the 
           // gaussian is in transit to another tile
-          if (!insert(stored, g)) {
-            insert(vertsIn, g);
-          }
+          bool overflow = !insert(vertsIn, g);
         }
         continue;
       }
@@ -355,7 +347,6 @@ public:
       // the gaussian is being propagated away from the anchor,
       // we need to render and pass it on until the extent is fully rendered.
       auto bb = g2D.GetBoundingBox();
-
       if (bb.diagonal().length() < tb.diagonal().length() * 5) {
         directions sendTo;
         auto clippedBB = bb.clip(tb, sendTo);
@@ -363,9 +354,7 @@ public:
         auto count = rasterise(g2D, clippedBB, tb);
         if (!ok) {
           // guard against losing a gaussian
-          if (!insert(stored, g)) {
-            insert(vertsIn, g);
-          }
+          bool overflow = !insert(vertsIn, g);
         }
       }
     }
@@ -404,10 +393,7 @@ public:
     readInput(downIn, direction::down, viewmatrix, tfb, vp);
 
     cullInternal(vertsIn, viewmatrix, tfb, vp);
-    cullInternal(stored, viewmatrix, tfb, vp);
-
     renderInternal(vertsIn, viewmatrix, tfb, vp);
-    renderInternal(stored, viewmatrix, tfb, vp);
 
     return true;
   }

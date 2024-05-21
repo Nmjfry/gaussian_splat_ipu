@@ -289,16 +289,17 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
       auto sliceFb = paddedFramebuffer.slice(mFb.front());
 
-      auto stored = vg.addVariable(poplar::FLOAT, {channelSize * 8});
-      vg.setTileMapping(stored, t);
+      auto storage = vg.addVariable(poplar::FLOAT, {channelSize * 8});
+      vg.setTileMapping(storage, t);
+
+      auto gaussians = concat(ptsIn, storage);
 
       auto v = vg.addVertex(splatCs, "Transform4x4");
       vg.setTileMapping(v, t);
       vg.connect(v["matrix"], localMvp.flatten());
-      vg.connect(v["vertsIn"], ptsIn);
+      vg.connect(v["vertsIn"], gaussians);
       vg.connect(v["localFb"], sliceFb);
       vg.connect(v["tile_id"], tid);
-      vg.connect(v["stored"], stored);
       vertices.push_back(v);
     }
   }
