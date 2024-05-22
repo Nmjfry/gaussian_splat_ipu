@@ -27,11 +27,13 @@ using namespace splat;
 // This is here as a reference to show what the
 // accumulating matrix product (AMP) engine assembly
 // vertices below are doing.
-class Transform4x4 : public poplar::MultiVertex {
+class GSplat : public poplar::MultiVertex {
 public:
   poplar::Input<poplar::Vector<float>> matrix;
   
   poplar::InOut<poplar::Vector<float>> vertsIn;
+  poplar::InOut<poplar::Vector<float>> depths;
+  // poplar::InOut<poplar::Vector<half>> indices;
 
   poplar::Output<poplar::Vector<float>> localFb;
   poplar::Input<poplar::Vector<int>> tile_id;
@@ -269,9 +271,9 @@ public:
 
       auto clipSpace = viewmatrix * glm::vec4(g.mean.x, g.mean.y, g.mean.z, g.mean.w);
       // perform frustum culling
-      if (clipSpace.z > 0.f) {
-        continue;
-      }
+      // if (clipSpace.z > 0.f) {
+      //   continue;
+      // }
 
       auto projMean = vp.clipSpaceToViewport(clipSpace);
 
