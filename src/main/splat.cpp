@@ -178,8 +178,8 @@ int main(int argc, char** argv) {
       uiServer->sendPreviewImage(*imagePtrBuffered);
     }
     {
-      // pvti::Tracepoint scope(&traceChannel, "build_histogram");
-      // splat::buildTileHistogram(pointCounts, clipSpace, cpufb, vp);
+      pvti::Tracepoint scope(&traceChannel, "build_histogram");
+      splat::buildTileHistogram(pointCounts, clipSpace, cpufb, vp);
     }
   };
 
@@ -190,12 +190,12 @@ int main(int argc, char** argv) {
     std::uint32_t count = 0u;
 
     if (state.device == "cpu") {
-      // pvti::Tracepoint scoped(&traceChannel, "mvp_transform_cpu");
-      // projectPoints(pts, projection, dynamicView, clipSpace);
-      // {
-      //   pvti::Tracepoint scope(&traceChannel, "splatting_cpu");
-      //   count = splat::splatPoints(*imagePtr, clipSpace, pts, projection * dynamicView, cpufb, vp);
-      // }
+      pvti::Tracepoint scoped(&traceChannel, "mvp_transform_cpu");
+      projectPoints(pts, projection, dynamicView, clipSpace);
+      {
+        pvti::Tracepoint scope(&traceChannel, "splatting_cpu");
+        count = splat::splatPoints(*imagePtr, clipSpace, pts, projection * dynamicView, cpufb, vp);
+      }
     } else if (state.device == "ipu") {
       pvti::Tracepoint scoped(&traceChannel, "mvp_transform_ipu");
       ipuSplatter->updateModelViewProjection(projection * dynamicView);
