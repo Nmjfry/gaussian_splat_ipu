@@ -121,12 +121,12 @@ int main(int argc, char** argv) {
   // make fb.numTiles copies of a 2D gaussian
   splat::Gaussians gsns;
   ipu_utils::logger()->info("Generating {} gaussians", pts.size());
-  for (std::size_t i = 0; i < pts.size(); i+=150) {
+  for (std::size_t i = 0; i < pts.size(); i++) {
     auto pt = pts[i].p;
     splat::Gaussian3D g;
     g.mean = {pt.x, pt.y, pt.z, 1.f};
     g.colour = {.4f, 0.f, .1f, 0.9f};
-    g.scale = {.2f, .2f, .2f};
+    g.scale = {.1f, .1f, .1f};
     g.gid = ((float) i)+1.f;
     gsns.push_back(g);
   }
@@ -216,7 +216,7 @@ int main(int argc, char** argv) {
       projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
       // Update modelview:
       dynamicView = modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(0.f, 1.f, 0.f));
-      // dynamicView = glm::translate(dynamicView, glm::vec3(state.X / 2000.f, state.Y / 2000.f, state.Z / 2000.f));
+      // dynamicView =dynamicView, glm::vec3(0.f, 0.f, -state.Z / 1000.f));
     } else {
       // Only log these if not in interactive mode:
       ipu_utils::logger()->info("Splat time: {} points/sec: {}", splatTimeSecs, pts.size()/splatTimeSecs);

@@ -7,6 +7,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include <poputil/TileMapping.hpp>
+#include <popops/TopK.hpp>
 
 #include <tileMapping/edge_builder.hpp>
 
@@ -185,7 +186,7 @@ void applyTileMapping(poplar::Graph& g, const poplar::Tensor& paddedInput, const
 // Add a vertex to project vertices that uses vanilla C++ code.
 void addProjectionVertex(poplar::Graph& g, poplar::ComputeSet& cs, unsigned t, const poplar::Tensor& tid,  const poplar::Tensor& westIn, const poplar::Tensor& eastOut,
                          const poplar::Tensor& modelViewProjection, const poplar::Tensor& ptsIn, const poplar::Tensor& localFb) {
-  auto v = g.addVertex(cs, "Transform4x4");
+  auto v = g.addVertex(cs, "GSplat");
   g.setTileMapping(v, t);
 
   g.connect(v["matrix"], modelViewProjection);
@@ -266,7 +267,9 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   const auto tmFb = vg.getTileMapping(paddedFramebuffer);
 
   unsigned numPoints = 100;
-  std::size_t channelSize = numPoints * GAUSSIAN_SIZE;
+  std::size_t channelSize = numPoints * grainSize;
+
+  program::Sequence sortGaussians;
 
   std::vector<poplar::VertexRef> vertices;
 
@@ -289,16 +292,26 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
       auto sliceFb = paddedFramebuffer.slice(mFb.front());
 
-      auto stored = vg.addVariable(poplar::FLOAT, {channelSize * 8});
-      vg.setTileMapping(stored, t);
+      auto storage = vg.addVariable(poplar::FLOAT, {channelSize * 8});
+      vg.setTileMapping(storage, t);
 
-      auto v = vg.addVertex(splatCs, "Transform4x4");
+      auto gaussians = concat(ptsIn, storage);
+      // ipu_utils::logger()->info("total gaussian storage: {}", (ptsIn.numElements() + storage.numElements()) / grainSize);
+
+      const auto depths = vg.addVariable(poplar::FLOAT, {(ptsIn.numElements() + storage.numElements()) / grainSize});
+      // const auto indices = vg.addVariable(poplar::HALF, {(ptsIn.numElements() + storage.numElements()) / grainSize});
+      vg.setTileMapping(depths, t);
+      // vg.setTileMapping(indices, t);
+      // const auto tk = popops::TopKParams(indices.numElements(), false, popops::SortOrder::DESCENDING);
+      // std::pair<poplar::Tensor, poplar::Tensor> sortedGs = popops::topKKeyValue(vg, sortGaussians, depths, indices, tk);
+
+      auto v = vg.addVertex(splatCs, "GSplat");
       vg.setTileMapping(v, t);
       vg.connect(v["matrix"], localMvp.flatten());
-      vg.connect(v["vertsIn"], ptsIn);
+      vg.connect(v["vertsIn"], gaussians);
       vg.connect(v["localFb"], sliceFb);
       vg.connect(v["tile_id"], tid);
-      vg.connect(v["stored"], stored);
+      vg.connect(v["depths"], depths);
       vertices.push_back(v);
     }
   }
@@ -363,7 +376,6 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   program::Sequence main;
   main.add(broadcastMvp);
   main.add(broadcastPoints);
-  // main.add(inputVertices.buildWrite(vg, true));
   main.add(program::Execute(splatCs));
   main.add(outputFramebuffer.buildRead(vg, true));
 
