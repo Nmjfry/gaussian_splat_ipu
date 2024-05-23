@@ -79,8 +79,11 @@ int main(int argc, char** argv) {
     return EXIT_FAILURE;
   }
 
+   // Create an instance of the Ply class to store the gaussian properties
+  splat::Ply ply;
+
   auto xyzFile = args["input"].as<std::string>();
-  auto pts = splat::loadXyz(std::ifstream(xyzFile));
+  auto pts = splat::loadPoints(xyzFile, ply);
   splat::Bounds3f bb(pts);
   ipu_utils::logger()->info("Total point count: {}", pts.size());
   ipu_utils::logger()->info("Point bounds (world space): {}", bb);
@@ -121,15 +124,30 @@ int main(int argc, char** argv) {
   // make fb.numTiles copies of a 2D gaussian
   splat::Gaussians gsns;
   ipu_utils::logger()->info("Generating {} gaussians", pts.size());
-  for (std::size_t i = 0; i < pts.size(); i++) {
-    auto pt = pts[i].p;
-    splat::Gaussian3D g;
-    g.mean = {pt.x, pt.y, pt.z, 1.f};
-    g.colour = {.4f, 0.f, .1f, 0.9f};
-    g.scale = {.1f, .1f, .1f};
-    g.gid = ((float) i)+1.f;
-    gsns.push_back(g);
+
+  if (ply.f_dc[0].values.size() != pts.size()) {
+    for (std::size_t i = 0; i < pts.size(); i++) {
+      auto pt = pts[i].p;
+      splat::Gaussian3D g;
+      g.mean = {pt.x, pt.y, pt.z, 1.f};
+      g.colour = {.4f, 0.f, .1f, 0.9f};
+      g.scale = {.1f, .1f, .1f};
+      g.gid = ((float) i)+1.f;
+      gsns.push_back(g);
+    }
+  } else {
+    for (std::size_t i = 0; i < pts.size(); i++) {
+      auto pt = pts[i].p;
+      splat::Gaussian3D g;
+      g.mean = {pt.x, pt.y, pt.z, 1.f};
+      g.colour = {ply.f_dc[0].values[i], ply.f_dc[1].values[i], ply.f_dc[2].values[i], ply.opacity.values[i]};
+      g.scale = {ply.scale[0].values[i], ply.scale[1].values[i], ply.scale[2].values[i]};
+      g.rot = {ply.rot[0].values[i], ply.rot[1].values[i], ply.rot[2].values[i], ply.rot[3].values[i]};
+      g.gid = static_cast<float>(i) + 1.0f;
+      gsns.push_back(g);
+    }
   }
+
 
   auto ipuSplatter = createIpuBuilder(gsns, fb, args["no-amp"].as<bool>());
   ipu_utils::GraphManager gm;
