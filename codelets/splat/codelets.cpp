@@ -160,9 +160,9 @@ public:
       return;
     }
     memcpy(&pixel, &localFb[idx], sizeof(pixel));
-    if (pixel.w >= 0.99f) {
-      return;
-    }
+    // if (pixel.w >= 0.99f) {
+    //   return;
+    // }
     pixel = pixel + colour;
     memcpy(&localFb[idx], &pixel, sizeof(pixel));
   }
@@ -215,9 +215,6 @@ public:
     for (auto i = 0; i < localFb.size(); i += 4) {
       ivec4 pixel;
       memcpy(&pixel, &localFb[i], sizeof(pixel));
-      if (pixel == colour) {
-        printf("pixel already set\n");
-      }
       pixel = pixel + colour;
       memcpy(&localFb[i], &pixel, sizeof(pixel));
     }
@@ -300,6 +297,7 @@ public:
       if (i >= buffer.size()) {
         break;
       }
+    // for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
 
       Gaussian3D g = unpack<Gaussian3D>(buffer, i);
       if (g.gid <= 0) {
@@ -307,11 +305,6 @@ public:
       }
 
       auto clipSpace = viewmatrix * glm::vec4(g.mean.x, g.mean.y, g.mean.z, g.mean.w);
-      // perform frustum culling
-      // if (clipSpace.z > 0.f) {
-      //   continue;
-      // }
-
       auto projMean = vp.clipSpaceToViewport(clipSpace);
       bool notAnchored = !tb.contains(ivec2{projMean.x, projMean.y});
 
@@ -325,7 +318,6 @@ public:
           insertAt(vertsIn, i, g);
         }
       } else {
-        // TODO: extract into separate loop post sorting
         ivec3 cov2D = g.ComputeCov2D(viewmatrix, tfb.width / 2, tfb.height / 2);
         Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
         auto bb = g2D.GetBoundingBox();
@@ -357,8 +349,6 @@ public:
         // when we hit an empty slot
         continue;
       }
-      // printf("tid: %d, gid: %f\n", tile_id[0], g.gid);
-
 
       // project the 3D gaussian into 2D using EWA splatting algorithm
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
@@ -416,7 +406,7 @@ public:
     // zero the framebuffer 
     auto black = ivec4{0.0f, 0.0f, 0.0f, 0.0f};
     // getTileColour(tile_id[0])
-    colourFb(black, workerId);
+    colourFb(getTileColour(tile_id[0]), workerId);
 
      //clear all of the out buffers:
     const auto startIndex = sizeof(Gaussian3D) * workerId;
@@ -443,7 +433,6 @@ public:
     const splat::Viewport vp(0.0f, 0.0f, IMWIDTH, IMHEIGHT);
     // Transpose because GLM storage order is column major:
     const auto viewmatrix = glm::transpose(glm::make_mat4(&matrix[0]));
-
 
     readInput(rightIn, direction::right, viewmatrix, tfb, vp);
     readInput(leftIn, direction::left, viewmatrix, tfb, vp);
