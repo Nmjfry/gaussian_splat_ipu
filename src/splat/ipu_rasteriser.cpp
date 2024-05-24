@@ -317,14 +317,12 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       const auto tk = popops::TopKParams(depths.numElements(), false, popops::SortOrder::DESCENDING);
       auto [ds, sortedIndices] = popops::topKWithPermutation(vg, sortGaussians, depths, tk);
       sortGaussians.add(program::Copy(sortedIndices, indices));
-      sortGaussians.add(program::Copy(ds, depths)); 
 
       auto v = vg.addVertex(splatCs, "GSplat");
       vg.setTileMapping(v, t);
       vg.connect(v["matrix"], localMvp.flatten());
       vg.connect(v["vertsIn"], gaussians);
       vg.connect(v["indices"], indices);
-      vg.connect(v["depths"], depths);
       vg.connect(v["localFb"], sliceFb);
       vg.connect(v["tile_id"], tid);
       vertices.push_back(v);
