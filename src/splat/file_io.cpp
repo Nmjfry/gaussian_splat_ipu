@@ -21,8 +21,8 @@ Points loadXyz(std::istream&& s) {
     pts.push_back({p, ones});
   }
 
-  auto rng = std::default_random_engine {};
-  std::shuffle(std::begin(pts), std::end(pts), rng);
+  // auto rng = std::default_random_engine {};
+  // std::shuffle(std::begin(pts), std::end(pts), rng);
 
   return pts;
 }
@@ -34,7 +34,7 @@ Points loadPlyFile(const std::string& filename, Ply& ply) {
     Points points;
     for (size_t i = 0; i < ply.x.values.size(); ++i) {
         Point3f point;
-        point.p = glm::vec3(ply.x.values[i], ply.z.values[i], ply.y.values[i]);
+        point.p = glm::vec3(ply.x.values[i], -ply.z.values[i], -ply.y.values[i]);
         // Add other properties if needed
         points.push_back(point);
     }
