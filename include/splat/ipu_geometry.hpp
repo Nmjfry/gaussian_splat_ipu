@@ -83,6 +83,9 @@ typedef struct directions {
     bool any() const {
       return up || right || down || left;
     }
+    bool none() const {
+      return !any();
+    }
 } directions;
 
 enum direction {

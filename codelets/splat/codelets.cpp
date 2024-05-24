@@ -81,19 +81,23 @@ public:
 
   template<typename InternalStorage> void cullInternal(InternalStorage& buffer, const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
     const auto tb = tfb.getTileBounds(tile_id[0]);
+    auto minfloat = -10000000.f;
+    // printf("minfloat: %f\n", minfloat);
+
     for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
+      auto idx = i / sizeof(Gaussian3D);
       Gaussian3D g = unpack<Gaussian3D>(buffer, i);
+
       if (g.gid <= 0) {
+        depths[idx] = minfloat;
         continue;
       }
 
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
       auto clipSpace = viewmatrix * glmMean;
 
-      auto minfloat = std::numeric_limits<float>::min();
       // perform near plane frustum culling
-      float depth = (clipSpace.z > 0.f) ? minfloat : clipSpace.z;
-      depths[i / sizeof(Gaussian3D)] = depth;
+      depths[idx] = (clipSpace.z > 0.f) ? minfloat : clipSpace.z;
     }
   }
 
@@ -125,6 +129,7 @@ public:
   poplar::Input<poplar::Vector<int>> tile_id;
   
   poplar::InOut<poplar::Vector<float>> vertsIn;
+  poplar::InOut<poplar::Vector<float>> depths;
   poplar::InOut<poplar::Vector<unsigned>> indices;
 
   poplar::Output<poplar::Vector<float>> localFb;
@@ -245,10 +250,10 @@ public:
 
     if (sendTo.any()) {
       bool ok = true;
-      if (sendTo.up) {
+      if (sendTo.up && recievedFrom != direction::up) {
         ok = ok && sendOnce(g, direction::up);
       }
-      if (sendTo.down) {
+      if (sendTo.down && recievedFrom != direction::down) {
         ok = ok && sendOnce(g, direction::down);
       }
       return ok;
@@ -275,11 +280,12 @@ public:
   template<typename InternalStorage> void renderInternal(InternalStorage& buffer, const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
     const auto tb = tfb.getTileBounds(tile_id[0]);
 
-    // auto id
-    for (auto i = 0u; i < buffer.size(); i+=sizeof(Gaussian3D)) {
+    auto idx = 0u;
+    for (auto i = indices[idx] * sizeof(Gaussian3D); i < buffer.size() && idx < indices.size(); i = indices[idx] * sizeof(Gaussian3D), idx++) {
+
       Gaussian3D g = unpack<Gaussian3D>(buffer, i);
       if (g.gid <= 0) {
-        continue;
+        break;//break?
       }
 
       auto clipSpace = viewmatrix * glm::vec4(g.mean.x, g.mean.y, g.mean.z, g.mean.w);
@@ -289,11 +295,7 @@ public:
       // }
 
       auto projMean = vp.clipSpaceToViewport(clipSpace);
-
-
       bool notAnchored = !tb.contains(ivec2{projMean.x, projMean.y});
-
-      bool evicted = false;
 
       if (notAnchored) {
         auto dstTile = tfb.pixCoordToTile(projMean.y, projMean.x);
@@ -302,9 +304,7 @@ public:
         evict<Gaussian3D>(buffer, i);
         if (!sendOnce(g, direction)) {
           // guard against losing a gaussian, put it right back in the buffer
-          insertAt(vertsIn, i, g);
-        } else {
-          evicted = true;
+          insert(vertsIn, g);
         }
       } else {
         // TODO: extract into separate loop post sorting
@@ -339,6 +339,10 @@ public:
         // when we hit an empty slot
         continue;
       }
+      // printf("tid: %d, gid: %f\n", tile_id[0], g.gid);
+
+
+      addBG({0.0f, 1.0f, 0.0f, 0.0f});
 
       // project the 3D gaussian into 2D using EWA splatting algorithm
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
@@ -355,6 +359,7 @@ public:
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
 
       auto dstTile = tfb.pixCoordToTile(g2D.mean.y, g2D.mean.x);
+      dstTile = dstTile < 0 ? 0 : dstTile;
       ivec2 dstCentre = tfb.getTileBounds(dstTile).centroid();
       ivec2 prevCentre = tbPrev.centroid();
       ivec2 curCentre = tb.centroid();
@@ -376,16 +381,19 @@ public:
       // the gaussian is being propagated away from the anchor,
       // we need to render and pass it on until the extent is fully rendered.
       auto bb = g2D.GetBoundingBox();
+
       if (bb.diagonal().length() < tb.diagonal().length() * 5) {
         directions sendTo;
         auto clippedBB = bb.clip(tb, sendTo);
         bool ok = protocol<Gaussian3D>(g, sendTo, recievedFrom);
-        auto count = rasterise(g2D, clippedBB, tb);
-        if (!ok) {
-          // guard against losing a gaussian
-          bool overflow = !insert(vertsIn, g);
+        rasterise(g2D, clippedBB, tb);
+        // if it sent to any direction and is not a boundary tile
+        if (ok && !tfb.checkImageBoundaries(tile_id[0]).any()) {
+          continue;
         }
       }
+
+      bool overflow = !insert(vertsIn, g);
     }
   } 
 
@@ -393,7 +401,9 @@ public:
   bool compute(unsigned workerId) {
 
     // zero the framebuffer 
-    colourFb(getTileColour(tile_id[0]), workerId);
+    auto black = ivec4{0.0f, 0.0f, 0.0f, 0.0f};
+    // getTileColour(tile_id[0])
+    colourFb(black, workerId);
 
      //clear all of the out buffers:
     const auto startIndex = sizeof(Gaussian3D) * workerId;
@@ -423,6 +433,7 @@ public:
     readInput(leftIn, direction::left, viewmatrix, tfb, vp);
     readInput(upIn, direction::up, viewmatrix, tfb, vp);
     readInput(downIn, direction::down, viewmatrix, tfb, vp);
+    
 
     return true;
   }
