@@ -74,19 +74,19 @@ template<typename G, typename Vec> void evict(Vec &buffer, unsigned idx) {
 class CullGaussians : public poplar::MultiVertex {
 public:
 
-  poplar::InOut<poplar::Vector<float>> vertsIn;
-  poplar::InOut<poplar::Vector<float>> depths;
+  poplar::Input<poplar::Vector<float>> vertsIn;
+  poplar::Output<poplar::Vector<float>> depths;
   poplar::Input<poplar::Vector<float>> matrix;
   poplar::Input<poplar::Vector<int>> tile_id;
 
-  template<typename InternalStorage> void cullInternal(InternalStorage& buffer, const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
+  void cullInternal(const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
     const auto tb = tfb.getTileBounds(tile_id[0]);
     auto minfloat = -10000000.f;
     // printf("minfloat: %f\n", minfloat);
 
-    for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
+    for (auto i = 0; i < vertsIn.size(); i+=sizeof(Gaussian3D)) {
       auto idx = i / sizeof(Gaussian3D);
-      Gaussian3D g = unpack<Gaussian3D>(buffer, i);
+      Gaussian3D g = unpack<Gaussian3D>(vertsIn, i);
 
       if (g.gid <= 0) {
         depths[idx] = minfloat;
@@ -102,13 +102,14 @@ public:
   }
 
   bool compute(unsigned workerId) {
+
     // construct mapping from tile to framebuffer
     const TiledFramebuffer tfb(IPU_TILEWIDTH, IPU_TILEHEIGHT);
     const splat::Viewport vp(0.0f, 0.0f, IMWIDTH, IMHEIGHT);
     // Transpose because GLM storage order is column major:
     const auto viewmatrix = glm::transpose(glm::make_mat4(&matrix[0]));
+    cullInternal(viewmatrix, tfb, vp);
 
-    cullInternal(vertsIn, viewmatrix, tfb, vp);
     return true;
   }
 
@@ -129,7 +130,6 @@ public:
   poplar::Input<poplar::Vector<int>> tile_id;
   
   poplar::InOut<poplar::Vector<float>> vertsIn;
-  poplar::InOut<poplar::Vector<float>> depths;
   poplar::InOut<poplar::Vector<unsigned>> indices;
 
   poplar::Output<poplar::Vector<float>> localFb;
@@ -160,6 +160,9 @@ public:
       return;
     }
     memcpy(&pixel, &localFb[idx], sizeof(pixel));
+    if (pixel.w >= 0.99f) {
+      return;
+    }
     pixel = pixel + colour;
     memcpy(&localFb[idx], &pixel, sizeof(pixel));
   }
@@ -212,11 +215,22 @@ public:
     for (auto i = 0; i < localFb.size(); i += 4) {
       ivec4 pixel;
       memcpy(&pixel, &localFb[i], sizeof(pixel));
+      if (pixel == colour) {
+        printf("pixel already set\n");
+      }
       pixel = pixel + colour;
       memcpy(&localFb[i], &pixel, sizeof(pixel));
     }
   }
 
+
+  /// Protocol for sending a gaussian to a neighbouring tile
+  /// spreads out left and right from centre in 2 beams, 
+  /// then sends up and down from these beams:
+  ///         |||||||||||
+  ///         <----o---->
+  ///         |||||||||||
+  /// currently sends back at edges, so we render twice... 
   template<typename G> bool protocol(const G& g, const directions& sendTo, const direction& recievedFrom) {
     if (recievedFrom == direction::right && sendTo.left) {
       bool ok = sendOnce(g, direction::left);
@@ -281,11 +295,15 @@ public:
     const auto tb = tfb.getTileBounds(tile_id[0]);
 
     auto idx = 0u;
-    for (auto i = indices[idx] * sizeof(Gaussian3D); i < buffer.size() && idx < indices.size(); i = indices[idx] * sizeof(Gaussian3D), idx++) {
+    for (; ; ++idx) {
+      auto i = indices[idx] * sizeof(Gaussian3D);
+      if (i >= buffer.size()) {
+        break;
+      }
 
       Gaussian3D g = unpack<Gaussian3D>(buffer, i);
       if (g.gid <= 0) {
-        break;//break?
+        break;
       }
 
       auto clipSpace = viewmatrix * glm::vec4(g.mean.x, g.mean.y, g.mean.z, g.mean.w);
@@ -304,7 +322,7 @@ public:
         evict<Gaussian3D>(buffer, i);
         if (!sendOnce(g, direction)) {
           // guard against losing a gaussian, put it right back in the buffer
-          insert(vertsIn, g);
+          insertAt(vertsIn, i, g);
         }
       } else {
         // TODO: extract into separate loop post sorting
@@ -341,8 +359,6 @@ public:
       }
       // printf("tid: %d, gid: %f\n", tile_id[0], g.gid);
 
-
-      addBG({0.0f, 1.0f, 0.0f, 0.0f});
 
       // project the 3D gaussian into 2D using EWA splatting algorithm
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
@@ -385,15 +401,12 @@ public:
       if (bb.diagonal().length() < tb.diagonal().length() * 5) {
         directions sendTo;
         auto clippedBB = bb.clip(tb, sendTo);
-        bool ok = protocol<Gaussian3D>(g, sendTo, recievedFrom);
+        protocol<Gaussian3D>(g, sendTo, recievedFrom);
         rasterise(g2D, clippedBB, tb);
-        // if it sent to any direction and is not a boundary tile
-        if (ok && !tfb.checkImageBoundaries(tile_id[0]).any()) {
-          continue;
-        }
       }
 
       bool overflow = !insert(vertsIn, g);
+
     }
   } 
 
@@ -420,6 +433,10 @@ public:
       evict<Gaussian3D>(downOut, i);
     }
 
+    if (workerId != 0) {
+      return true;
+    }
+
 
     // construct mapping from tile to framebuffer
     const TiledFramebuffer tfb(IPU_TILEWIDTH, IPU_TILEHEIGHT);
@@ -427,13 +444,13 @@ public:
     // Transpose because GLM storage order is column major:
     const auto viewmatrix = glm::transpose(glm::make_mat4(&matrix[0]));
 
-    renderInternal(vertsIn, viewmatrix, tfb, vp);
 
     readInput(rightIn, direction::right, viewmatrix, tfb, vp);
     readInput(leftIn, direction::left, viewmatrix, tfb, vp);
     readInput(upIn, direction::up, viewmatrix, tfb, vp);
     readInput(downIn, direction::down, viewmatrix, tfb, vp);
     
+    renderInternal(vertsIn, viewmatrix, tfb, vp);
 
     return true;
   }

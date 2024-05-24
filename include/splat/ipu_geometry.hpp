@@ -27,6 +27,9 @@ struct ivec4 {
   struct ivec4 operator*(float const &scalar) {
     return {x * scalar, y * scalar, z * scalar, w * scalar};
   }
+  bool operator==(ivec4 const &other) {
+    return x == other.x && y == other.y && z == other.z && w == other.w;
+  }
 };
 
 typedef struct ivec4 ivec4;

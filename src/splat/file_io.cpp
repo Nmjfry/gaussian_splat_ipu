@@ -21,8 +21,8 @@ Points loadXyz(std::istream&& s) {
     pts.push_back({p, ones});
   }
 
-  auto rng = std::default_random_engine {};
-  std::shuffle(std::begin(pts), std::end(pts), rng);
+  // auto rng = std::default_random_engine {};
+  // std::shuffle(std::begin(pts), std::end(pts), rng);
 
   return pts;
 }
