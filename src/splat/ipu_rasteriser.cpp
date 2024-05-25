@@ -302,8 +302,10 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       vg.setTileMapping(storage, t);
       auto gaussians = concat(ptsIn, storage);
 
-      const auto depths = vg.addVariable(poplar::FLOAT, {(ptsIn.numElements() + storage.numElements()) / grainSize});
-      const auto indices = vg.addVariable(poplar::UNSIGNED_INT, {(ptsIn.numElements() + storage.numElements()) / grainSize});
+      size_t totalGaussianStorage = (ptsIn.numElements() + storage.numElements()) / grainSize;
+
+      const auto depths = vg.addVariable(poplar::FLOAT, {totalGaussianStorage});
+      const auto indices = vg.addVariable(poplar::UNSIGNED_INT, {totalGaussianStorage});
       vg.setTileMapping(depths, t);
       vg.setTileMapping(indices, t);
 
@@ -329,60 +331,8 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
     }
   }
 
-  struct edge r2l("rightOut", "leftIn"); // -->
-  struct edge l2r("leftOut", "rightIn"); // <--
-
-  struct edge l2l("leftOut", "leftIn"); // <->
-  struct edge r2r("rightOut", "rightIn"); // >-<
-
-  struct edge u2d("upOut", "downIn");
-  struct edge d2u("downOut", "upIn");
-  
-  struct edge u2u("upOut", "upIn");
-  struct edge d2d("downOut", "downIn");
-
   EdgeBuilder eb(vg, vertices, channelSize);
-
-  for (auto t = 0u; t < vertices.size(); ++t) {
-    const auto& m = tm[t];
-    if (m.size() > 1u) {
-      throw std::runtime_error("Expected fb to be stored as a single contiguous region per tile.");
-    }
-    if (m.size() > 0u) {
-      auto tileOnBoundary = fbMapping.checkImageBoundaries(t);
-
-      if (tileOnBoundary.up) {
-        eb.addEdge(t, t, u2u);
-      }
-
-      if (tileOnBoundary.left) {
-        eb.addEdge(t, t, l2l);
-      }
-
-      if (tileOnBoundary.right) {
-        eb.addEdge(t, t, r2r);
-      }
-
-      if (tileOnBoundary.down) {
-        eb.addEdge(t, t, d2d);
-      }
-
-      if (!tileOnBoundary.right && t + 1 < vertices.size()) {
-        eb.addEdge(t, t + 1, r2l);
-        eb.addEdge(t + 1, t, l2r);
-      } else if (!tileOnBoundary.right) {
-        eb.addEdge(t, t, r2r);
-      }
-
-      if (!tileOnBoundary.down && t + fbMapping.numTilesAcross < vertices.size()) {
-        eb.addEdge(t, t + fbMapping.numTilesAcross, d2u);
-        eb.addEdge(t + fbMapping.numTilesAcross, t, u2d);
-      } else if (!tileOnBoundary.down) {
-        eb.addEdge(t, t, d2d);
-      }
-    }
-  }
-
+  eb.constructLattice(tm, fbMapping);
   // this program sequence will copy the points between all the tiles in the graph
   program::Sequence broadcastPoints = eb.getBroadcastSequence();
 
