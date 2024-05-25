@@ -25,6 +25,7 @@ public:
   virtual ~IpuSplatter() {}
 
   void updateModelViewProjection(const glm::mat4& mvp);
+  void updateFocalLengths(float fx, float fy);
   void getProjectedPoints(std::vector<glm::vec4>& pts) const;
   void getFrameBuffer(cv::Mat &frame) const;
 
@@ -35,8 +36,10 @@ private:
   ipu_utils::StreamableTensor modelViewProjection;
   ipu_utils::StreamableTensor inputVertices;
   ipu_utils::StreamableTensor outputFramebuffer;
+  ipu_utils::StreamableTensor fxy;
   std::vector<float> transformMatrix;
   std::vector<float> hostVertices;
+  std::vector<float> fxyHost;
   TiledFramebuffer fbMapping;
   std::vector<float> frameBuffer;
   std::atomic<bool> initialised;

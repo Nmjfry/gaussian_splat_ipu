@@ -128,6 +128,7 @@ class GSplat : public poplar::MultiVertex {
 public:
   poplar::Input<poplar::Vector<float>> matrix;
   poplar::Input<poplar::Vector<int>> tile_id;
+  poplar::Input<poplar::Vector<float>> fxy;
   
   poplar::InOut<poplar::Vector<float>> vertsIn;
   poplar::InOut<poplar::Vector<unsigned>> indices;
@@ -274,14 +275,19 @@ public:
 
   unsigned rasterise(const Gaussian2D &g, const Bounds2f& bb, const Bounds2f& tb) {
     auto count = 0u;
+    auto centre = glm::vec2(g.mean.x, g.mean.y);
     for (auto i = bb.min.x; i < bb.max.x; i++) {
       for (auto j = bb.min.y; j < bb.max.y; j++) {
         auto px = viewspaceToTile({i, j}, tb.min);
-        if(g.inside(i,j)) {
+        // render if near the centre of gaussian:
+        if (glm::length(centre - glm::vec2(i, j)) < 2.0f) {
           setPixel(px.x, px.y, g.colour);
-        } else {
-          // setPixel(px.x, px.y, tc);
         }
+        // if(g.inside(i,j)) {
+        //   setPixel(px.x, px.y, g.colour);
+        // } else {
+        //   // setPixel(px.x, px.y, tc);
+        // }
         count++;
       }
     }
@@ -291,17 +297,22 @@ public:
   template<typename InternalStorage> void renderInternal(InternalStorage& buffer, const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
     const auto tb = tfb.getTileBounds(tile_id[0]);
 
-    auto idx = 0u;
-    for (; ; ++idx) {
-      auto i = indices[idx] * sizeof(Gaussian3D);
-      if (i >= buffer.size()) {
-        break;
-      }
-    // for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
+    // auto fx = 1.0f;// / tanf(0.5f * 3.14159265358979323846f);
+    // glm::vec2 fov(2.0f * atanf(tfb.width / (2.0f * fxy[0])),
+    //                   2.0f * atanf(tfb.height / (2.0f * fxy[1])));
+
+
+    // auto idx = 0u;
+    // for (; ; ++idx) {
+    //   auto i = indices[idx] * sizeof(Gaussian3D);
+    //   if (i >= buffer.size()) {
+    //     break;
+    //   }
+    for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
 
       Gaussian3D g = unpack<Gaussian3D>(buffer, i);
       if (g.gid <= 0) {
-        break;
+        continue;
       }
 
       auto clipSpace = viewmatrix * glm::vec4(g.mean.x, g.mean.y, g.mean.z, g.mean.w);
@@ -318,7 +329,7 @@ public:
           insertAt(vertsIn, i, g);
         }
       } else {
-        ivec3 cov2D = g.ComputeCov2D(viewmatrix, tfb.width / 2, tfb.height / 2);
+        ivec3 cov2D = g.ComputeCov2D(viewmatrix, fxy[0], fxy[1]);
         Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
         auto bb = g2D.GetBoundingBox();
         if (bb.diagonal().length() < tb.diagonal().length() * 5) {
@@ -339,6 +350,11 @@ public:
     // Get the boundary of the current tile's framebuffer section
     const auto tb = tfb.getTileBounds(tile_id[0]);
     const auto tbPrev = tfb.getTileBounds(tfb.getNearbyTile(tile_id[0], recievedFrom));
+
+    // auto fx = 1.0f;// / tanf(0.5f * 3.14159265358979323846f);
+    // glm::vec2 fov(2.0f * atanf(tfb.width / (2.0f * fx)),
+    //                   2.0f * atanf(tfb.height / (2.0f * fx)));
+
 
     // Iterate over the input channel and unpack the Gaussian3D structs
     for (auto i = 0; i < bufferIn.size(); i+=sizeof(Gaussian3D)) {
@@ -361,7 +377,7 @@ public:
         continue;
       } 
 
-      ivec3 cov2D = g.ComputeCov2D(viewmatrix, tfb.width / 2, tfb.height / 2);
+      ivec3 cov2D = g.ComputeCov2D(viewmatrix, fxy[0], fxy[1]);
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
 
       auto dstTile = tfb.pixCoordToTile(g2D.mean.y, g2D.mean.x);
@@ -406,7 +422,7 @@ public:
     // zero the framebuffer 
     auto black = ivec4{0.0f, 0.0f, 0.0f, 0.0f};
     // getTileColour(tile_id[0])
-    colourFb(getTileColour(tile_id[0]), workerId);
+    colourFb(black, workerId);
 
      //clear all of the out buffers:
     const auto startIndex = sizeof(Gaussian3D) * workerId;
