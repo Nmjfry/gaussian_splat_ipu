@@ -130,9 +130,16 @@ int main(int argc, char** argv) {
     auto pt = pts[i].p;
     splat::Gaussian3D g;
     g.mean = {pt.x, pt.y, pt.z, 1.f};
-    g.colour = {.25f, .25f, .25f, 1.f};//{ply.f_dc[0].values[i], ply.f_dc[1].values[i], ply.f_dc[2].values[i], ply.opacity.values[i]};
-    g.scale = {ply.scale[0].values[i], ply.scale[1].values[i], ply.scale[2].values[i]};
-    // g.rot = {ply.rot[0].values[i], ply.rot[1].values[i], ply.rot[2].values[i], ply.rot[3].values[i]};
+    // g.colour = {0.05f, 0.05f, 0.05f, 1.0f};
+    // g.scale = {1.f, 1.f, 1.f};
+    if (ply.f_dc[0].values.size() > 0) {
+      g.colour = {ply.f_dc[0].values[i], ply.f_dc[1].values[i], ply.f_dc[2].values[i], ply.opacity.values[i]};
+      g.scale = {-ply.scale[0].values[i], -ply.scale[1].values[i], -ply.scale[2].values[i]};
+      g.rot = {ply.rot[0].values[i], ply.rot[1].values[i], ply.rot[2].values[i], ply.rot[3].values[i]};
+    } else {
+      g.colour = {0.05f, 0.05f, 0.05f, 1.0f};
+      g.scale = {1.f, 1.f, 1.f};
+    }
     g.gid = static_cast<float>(i) + 1.0f;
     gsns.push_back(g);
   }
@@ -168,7 +175,8 @@ int main(int argc, char** argv) {
   auto projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
   auto cameraTranslation = glm::mat4x4(1.f);
 
-  ipuSplatter->updateModelViewProjection(projection * modelView);
+  ipuSplatter->updateModelView(modelView);
+  ipuSplatter->updateProjection(projection);
   gm.prepareEngine();
 
   std::vector<glm::vec4> clipSpace;
@@ -201,12 +209,13 @@ int main(int argc, char** argv) {
       projectPoints(pts, projection, dynamicView, clipSpace);
       {
         pvti::Tracepoint scope(&traceChannel, "splatting_cpu");
-        count = splat::splatPoints(*imagePtr, clipSpace, pts, projection * dynamicView, cpufb, vp);
+        count = splat::splatPoints(*imagePtr, clipSpace, pts, projection, dynamicView, cpufb, vp);
       }
     } else if (state.device == "ipu") {
       pvti::Tracepoint scoped(&traceChannel, "mvp_transform_ipu");
-      ipuSplatter->updateModelViewProjection(projection * dynamicView);
-      ipuSplatter->updateFocalLengths(state.X / 2000.f, state.Y / 2000.f);
+      ipuSplatter->updateModelView(dynamicView);
+      ipuSplatter->updateProjection(projection);
+      ipuSplatter->updateFocalLengths(state.X, state.Y);
       gm.execute(*ipuSplatter);
       ipuSplatter->getFrameBuffer(*imagePtr);
     }

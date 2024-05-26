@@ -24,7 +24,8 @@ public:
 
   virtual ~IpuSplatter() {}
 
-  void updateModelViewProjection(const glm::mat4& mvp);
+  void updateProjection(const glm::mat4& mp);
+  void updateModelView(const glm::mat4& mv);
   void updateFocalLengths(float fx, float fy);
   void getProjectedPoints(std::vector<glm::vec4>& pts) const;
   void getFrameBuffer(cv::Mat &frame) const;
@@ -33,11 +34,14 @@ private:
   void build(poplar::Graph& graph, const poplar::Target& target) override;
   void execute(poplar::Engine& engine, const poplar::Device& device) override;
 
-  ipu_utils::StreamableTensor modelViewProjection;
+  ipu_utils::StreamableTensor modelView;
+  ipu_utils::StreamableTensor projection;
+
   ipu_utils::StreamableTensor inputVertices;
   ipu_utils::StreamableTensor outputFramebuffer;
   ipu_utils::StreamableTensor fxy;
-  std::vector<float> transformMatrix;
+  std::vector<float> hostModelView;
+  std::vector<float> hostProjection;
   std::vector<float> hostVertices;
   std::vector<float> fxyHost;
   TiledFramebuffer fbMapping;
