@@ -281,13 +281,13 @@ public:
         auto px = viewspaceToTile({i, j}, tb.min);
         // render if near the centre of gaussian:
         if (glm::length(centre - glm::vec2(i, j)) < 2.0f) {
-          setPixel(px.x, px.y, g.colour);
+          setPixel(px.x, px.y, {1.f, 1.f, 1.f, 1.f});
         }
-        // if(g.inside(i,j)) {
-        //   setPixel(px.x, px.y, g.colour);
-        // } else {
-        //   // setPixel(px.x, px.y, tc);
-        // }
+        if(g.inside(i,j)) {
+          setPixel(px.x, px.y, g.colour);
+        } else {
+          // setPixel(px.x, px.y, tc);
+        }
         count++;
       }
     }
