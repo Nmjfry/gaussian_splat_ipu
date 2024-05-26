@@ -301,23 +301,6 @@ public:
     return count;
   }
 
-  void rasteriseClosest(const Gaussian2D &g, const Bounds2f& bb, const Bounds2f& tb) {
-    auto centre = glm::vec2(g.mean.x, g.mean.y);
-    for (auto i = bb.min.x; i < bb.max.x; i++) {
-      for (auto j = bb.min.y; j < bb.max.y; j++) {
-        auto px = viewspaceToTile({i, j}, tb.min);
-        // render if near the centre of gaussian:
-        if (glm::length(centre - glm::vec2(i, j)) < 2.0f) {
-          setPixel(px.x, px.y, {1.f, 1.f, 1.f, 1.f});
-        }
-        if(g.inside(i,j)) {
-          unsigned idx = toByteBufferIndex(i, j);
-          memcpy(&localFb[idx], &colour, sizeof(pixel));
-        } 
-      }
-    }
-  }
-
   void printVec3(const ivec3& v) {
     printf("x: %f, y: %f, z: %f\n", v.x, v.y, v.z);
   }

@@ -286,7 +286,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   const auto csName = disableAMPVertices ? "project" : "project_amp";
   auto splatCs = vg.addComputeSet(csName);
 
-  auto cullCs = vg.addComputeSet("cull");
+  // auto cullCs = vg.addComputeSet("cull");
 
   // Get the tile mapping and connect the vertices:
   const auto tm = vg.getTileMapping(paddedInput);
@@ -329,7 +329,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
       auto sliceFb = paddedFramebuffer.slice(mFb.front());
 
-      auto storage = vg.addVariable(poplar::FLOAT, {channelSize * 5});
+      auto storage = vg.addVariable(poplar::FLOAT, {channelSize * 8});
       vg.setTileMapping(storage, t);
       auto gaussians = concat(ptsIn, storage);
 
@@ -340,13 +340,13 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       vg.setTileMapping(depths, t);
       vg.setTileMapping(indices, t);
 
-      auto cull = vg.addVertex(cullCs, "CullGaussians");
-      vg.setTileMapping(cull, t);
-      vg.connect(cull["modelView"], localMv.flatten());
-      vg.connect(cull["projection"], localProj.flatten());
-      vg.connect(cull["vertsIn"], gaussians);
-      vg.connect(cull["depths"], depths);
-      vg.connect(cull["tile_id"], tid);
+      // auto cull = vg.addVertex(cullCs, "CullGaussians");
+      // vg.setTileMapping(cull, t);
+      // vg.connect(cull["modelView"], localMv.flatten());
+      // vg.connect(cull["projection"], localProj.flatten());
+      // vg.connect(cull["vertsIn"], gaussians);
+      // vg.connect(cull["depths"], depths);
+      // vg.connect(cull["tile_id"], tid);
 
       // const auto tk = popops::TopKParams(depths.numElements(), false, popops::SortOrder::DESCENDING);
       // auto [ds, sortedIndices] = popops::topKWithPermutation(vg, sortGaussians, depths, tk);
@@ -372,7 +372,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
   program::Sequence main;
   main.add(broadcastMvp);
-  main.add(program::Execute(cullCs));
+  // main.add(program::Execute(cullCs));
   main.add(sortGaussians);
   main.add(program::Execute(splatCs));
   main.add(broadcastPoints);
