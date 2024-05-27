@@ -313,8 +313,9 @@ class Gaussian3D {
       return a < b ? a : b;
     }
 
-    ivec3 ComputeCov2D(const glm::mat4& mvp, float tan_fovx, float tan_fovy) {
-      glm::vec3 t = glm::vec3(mvp * glm::vec4(mean.x, mean.y, mean.z, 1.f));
+    ivec3 ComputeCov2D(const glm::mat4& projmatrix, const glm::mat4& viewmatrix, float tan_fovx, float tan_fovy) {
+      // const auto mvp = projmatrix * viewmatrix;
+      glm::vec3 t = glm::vec3(viewmatrix * glm::vec4(mean.x, mean.y, mean.z, 1.f));
       const float limx = 1.3f * tan_fovx;
       const float limy = 1.3f * tan_fovy;
       const float txtz = t.x / t.z;
@@ -322,15 +323,15 @@ class Gaussian3D {
       t.x = min(limx, max(-limx, txtz)) * t.z;
       t.y = min(limy, max(-limy, tytz)) * t.z;
 
-      const float focal_x = 1.7f;
-      const float focal_y = 1.f;
+      const float focal_x = 1.0f;
+      const float focal_y = 1.0f;
 
       glm::mat3 J = glm::mat3(
         focal_x / t.z, 0.0f, -(focal_x * t.x) / (t.z * t.z),
         0.0f, focal_y / t.z, -(focal_y * t.y) / (t.z * t.z),
         0, 0, 0);
 
-      glm::mat3 W = glm::mat3(mvp);
+      glm::mat3 W = glm::mat3(viewmatrix);
 
       glm::mat3 T = W * J;
 

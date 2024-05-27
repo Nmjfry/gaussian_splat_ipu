@@ -22,7 +22,8 @@ void projectPoints(const splat::Points& in, const glm::mat4& projection, const g
 std::uint32_t splatPoints(cv::Mat& image,
                           const std::vector<glm::vec4>& clipCoords,
                           const splat::Points& in,
-                          const glm::mat4& mvp,
+                          const glm::mat4& projection,
+                          const glm::mat4& modelView,
                           TiledFramebuffer& fb,
                           Viewport& vp,
                           std::uint8_t value=25);

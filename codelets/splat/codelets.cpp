@@ -76,7 +76,10 @@ public:
 
   poplar::Input<poplar::Vector<float>> vertsIn;
   poplar::Output<poplar::Vector<float>> depths;
-  poplar::Input<poplar::Vector<float>> matrix;
+
+  poplar::Input<poplar::Vector<float>> modelView;
+  poplar::Input<poplar::Vector<float>> projection;
+
   poplar::Input<poplar::Vector<int>> tile_id;
 
   void cullInternal(const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
@@ -107,8 +110,10 @@ public:
     const TiledFramebuffer tfb(IPU_TILEWIDTH, IPU_TILEHEIGHT);
     const splat::Viewport vp(0.0f, 0.0f, IMWIDTH, IMHEIGHT);
     // Transpose because GLM storage order is column major:
-    const auto viewmatrix = glm::transpose(glm::make_mat4(&matrix[0]));
-    cullInternal(viewmatrix, tfb, vp);
+    const auto viewmatrix = glm::transpose(glm::make_mat4(&modelView[0]));
+    const auto projmatrix = glm::transpose(glm::make_mat4(&projection[0]));
+    const auto mvp = projmatrix * viewmatrix;
+    cullInternal(mvp, tfb, vp);
 
     return true;
   }
@@ -126,8 +131,11 @@ public:
 // vertices below are doing.
 class GSplat : public poplar::MultiVertex {
 public:
-  poplar::Input<poplar::Vector<float>> matrix;
+  poplar::Input<poplar::Vector<float>> modelView;
+  poplar::Input<poplar::Vector<float>> projection;
+
   poplar::Input<poplar::Vector<int>> tile_id;
+  poplar::Input<poplar::Vector<float>> fxy;
   
   poplar::InOut<poplar::Vector<float>> vertsIn;
   poplar::InOut<poplar::Vector<unsigned>> indices;
@@ -154,11 +162,6 @@ public:
   void setPixel(float x, float y, const ivec4 &colour) {
     ivec4 pixel;
     unsigned idx = toByteBufferIndex(x, y);
-    if (idx >= localFb.size()) {
-      printf("ERROR: setting pixel outside of framebuffer bounds\n");
-      printf(" --> please check coordinate mapping is in tile space\n");
-      return;
-    }
     memcpy(&pixel, &localFb[idx], sizeof(pixel));
     // if (pixel.w >= 0.99f) {
     //   return;
@@ -274,41 +277,48 @@ public:
 
   unsigned rasterise(const Gaussian2D &g, const Bounds2f& bb, const Bounds2f& tb) {
     auto count = 0u;
+    auto centre = glm::vec2(g.mean.x, g.mean.y);
     for (auto i = bb.min.x; i < bb.max.x; i++) {
       for (auto j = bb.min.y; j < bb.max.y; j++) {
         auto px = viewspaceToTile({i, j}, tb.min);
         if(g.inside(i,j)) {
           setPixel(px.x, px.y, g.colour);
-        } else {
-          // setPixel(px.x, px.y, tc);
-        }
-        count++;
+        } 
       }
     }
     return count;
   }
 
-  template<typename InternalStorage> void renderInternal(InternalStorage& buffer, const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
+  template<typename InternalStorage> void renderInternal(InternalStorage& buffer,
+                                                         const glm::mat4& projmatrix,
+                                                         const glm::mat4& viewmatrix,
+                                                         const TiledFramebuffer& tfb, 
+                                                         const splat::Viewport& vp) {
     const auto tb = tfb.getTileBounds(tile_id[0]);
+    const auto mvp = projmatrix * viewmatrix;
+    glm::vec2 tanfov(2.0f * atanf(tfb.width / (2.0f * fxy[0])),
+                      2.0f * atanf(tfb.height / (2.0f * fxy[0])));
 
-    auto idx = 0u;
-    for (; ; ++idx) {
-      auto i = indices[idx] * sizeof(Gaussian3D);
-      if (i >= buffer.size()) {
-        break;
-      }
-    // for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
+    // Traverse indirect indices of depth-sorted gaussians
+    // auto idx = 0u;
+    // for (; ; ++idx) {
+    //   auto i = indices[idx] * sizeof(Gaussian3D);
+    //   if (i >= buffer.size()) {
+    //     break;
+    //   }
+    for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
 
       Gaussian3D g = unpack<Gaussian3D>(buffer, i);
-      if (g.gid <= 0) {
-        break;
+      if (g.gid <= 0 || g.colour.w < 0.1f) {
+        continue;
       }
 
-      auto clipSpace = viewmatrix * glm::vec4(g.mean.x, g.mean.y, g.mean.z, g.mean.w);
+      auto clipSpace = mvp * glm::vec4(g.mean.x, g.mean.y, g.mean.z, g.mean.w);
       auto projMean = vp.clipSpaceToViewport(clipSpace);
       bool notAnchored = !tb.contains(ivec2{projMean.x, projMean.y});
 
       if (notAnchored) {
+        // evict and send on to the next tile
         auto dstTile = tfb.pixCoordToTile(projMean.y, projMean.x);
         auto dstCentre = tfb.getTileBounds(dstTile).centroid();
         auto direction = tfb.getBestDirection(tb.centroid(), dstCentre);
@@ -317,10 +327,13 @@ public:
           // guard against losing a gaussian, put it right back in the buffer
           insertAt(vertsIn, i, g);
         }
+
       } else {
-        ivec3 cov2D = g.ComputeCov2D(viewmatrix, tfb.width / 2, tfb.height / 2);
+        // render and clip, send to the halo region around the current tile
+        ivec3 cov2D = g.ComputeCov2D(projmatrix, viewmatrix, tanfov.x, tanfov.y);
         Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
         auto bb = g2D.GetBoundingBox();
+
         if (bb.diagonal().length() < tb.diagonal().length() * 5) {
           directions dirs;
           bb = bb.clip(tb, dirs);
@@ -333,6 +346,7 @@ public:
 
   void readInput(poplar::Input<poplar::Vector<float>> &bufferIn,
                                     const direction& recievedFrom,
+                                    const glm::mat4& projmatrix,
                                     const glm::mat4& viewmatrix,
                                     const TiledFramebuffer& tfb,
                                     const splat::Viewport& vp) {
@@ -340,10 +354,14 @@ public:
     const auto tb = tfb.getTileBounds(tile_id[0]);
     const auto tbPrev = tfb.getTileBounds(tfb.getNearbyTile(tile_id[0], recievedFrom));
 
+    glm::vec2 tanfov(2.0f * atanf(tfb.width / (2.0f * fxy[0])),
+                    2.0f * atanf(tfb.height / (2.0f * fxy[0])));
+    const auto mvp = projmatrix * viewmatrix;
+
     // Iterate over the input channel and unpack the Gaussian3D structs
     for (auto i = 0; i < bufferIn.size(); i+=sizeof(Gaussian3D)) {
       Gaussian3D g = unpack<Gaussian3D>(bufferIn, i);
-      if (g.gid <= 0) {
+      if (g.gid <= 0 || g.colour.w < 0.1f) {
         // gid 0 if the place in the buffer is not occupied,
         // since the channels are filled from the front we can break
         // when we hit an empty slot
@@ -352,7 +370,7 @@ public:
 
       // project the 3D gaussian into 2D using EWA splatting algorithm
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
-      auto projMean = vp.clipSpaceToViewport(viewmatrix * glmMean);
+      auto projMean = vp.clipSpaceToViewport(mvp * glmMean);
    
       if (tb.contains(ivec2{projMean.x, projMean.y})) {
         // anchor arrived so we insert and let
@@ -361,7 +379,7 @@ public:
         continue;
       } 
 
-      ivec3 cov2D = g.ComputeCov2D(viewmatrix, tfb.width / 2, tfb.height / 2);
+      ivec3 cov2D = g.ComputeCov2D(projmatrix, viewmatrix, tanfov.x, tanfov.y);
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
 
       auto dstTile = tfb.pixCoordToTile(g2D.mean.y, g2D.mean.x);
@@ -396,19 +414,10 @@ public:
       }
 
       bool overflow = !insert(vertsIn, g);
-
     }
   } 
 
-
-  bool compute(unsigned workerId) {
-
-    // zero the framebuffer 
-    auto black = ivec4{0.0f, 0.0f, 0.0f, 0.0f};
-    // getTileColour(tile_id[0])
-    colourFb(getTileColour(tile_id[0]), workerId);
-
-     //clear all of the out buffers:
+  void clearOutBuffers(unsigned workerId) {
     const auto startIndex = sizeof(Gaussian3D) * workerId;
     for (auto i = startIndex; i < rightOut.size(); i+=sizeof(Gaussian3D) * numWorkers()) {
       evict<Gaussian3D>(rightOut, i);
@@ -422,6 +431,18 @@ public:
     for (auto i = startIndex; i < downOut.size(); i+=sizeof(Gaussian3D) * numWorkers()) {
       evict<Gaussian3D>(downOut, i);
     }
+  }
+
+
+  bool compute(unsigned workerId) {
+
+    // zero the framebuffer 
+    auto black = ivec4{0.0f, 0.0f, 0.0f, 0.0f};
+    // getTileColour(tile_id[0])
+    colourFb(black, workerId);
+
+     //clear all of the out buffers:
+    clearOutBuffers(workerId);
 
     if (workerId != 0) {
       return true;
@@ -431,15 +452,17 @@ public:
     // construct mapping from tile to framebuffer
     const TiledFramebuffer tfb(IPU_TILEWIDTH, IPU_TILEHEIGHT);
     const splat::Viewport vp(0.0f, 0.0f, IMWIDTH, IMHEIGHT);
-    // Transpose because GLM storage order is column major:
-    const auto viewmatrix = glm::transpose(glm::make_mat4(&matrix[0]));
 
-    readInput(rightIn, direction::right, viewmatrix, tfb, vp);
-    readInput(leftIn, direction::left, viewmatrix, tfb, vp);
-    readInput(upIn, direction::up, viewmatrix, tfb, vp);
-    readInput(downIn, direction::down, viewmatrix, tfb, vp);
+    // Transpose because GLM storage order is column major:
+    const auto viewmatrix = glm::transpose(glm::make_mat4(&modelView[0]));
+    const auto projmatrix = glm::transpose(glm::make_mat4(&projection[0]));
+
+    readInput(rightIn, direction::right, projmatrix, viewmatrix, tfb, vp);
+    readInput(leftIn, direction::left, projmatrix, viewmatrix, tfb, vp);
+    readInput(upIn, direction::up, projmatrix, viewmatrix, tfb, vp);
+    readInput(downIn, direction::down, projmatrix, viewmatrix, tfb, vp);
     
-    renderInternal(vertsIn, viewmatrix, tfb, vp);
+    renderInternal(vertsIn, projmatrix, viewmatrix, tfb, vp);
 
     return true;
   }
