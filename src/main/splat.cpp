@@ -125,15 +125,19 @@ int main(int argc, char** argv) {
   splat::Gaussians gsns;
   ipu_utils::logger()->info("Generating {} gaussians", pts.size());
 
+
+  // (/ 1.0 (* 2.0 (sqrt pi)))
+  const float SH_C0 = 0.28209479177387814f;
   
-  for (std::size_t i = 0; i < pts.size(); i++) {
+  for (std::size_t i = 0; i < pts.size(); i+=2) {
     auto pt = pts[i].p;
     splat::Gaussian3D g;
     g.mean = {pt.x, pt.y, pt.z, 1.f};
-    // g.colour = {0.05f, 0.05f, 0.05f, 1.0f};
-    // g.scale = {1.f, 1.f, 1.f};
     if (ply.f_dc[0].values.size() > 0) {
-      g.colour = {ply.f_dc[0].values[i], ply.f_dc[1].values[i], ply.f_dc[2].values[i], ply.opacity.values[i]};
+      glm::vec3 colour = {std::max(SH_C0 * ply.f_dc[0].values[i], 0.f),
+                          std::max(SH_C0 * ply.f_dc[1].values[i], 0.f),
+                          std::max(SH_C0 * ply.f_dc[2].values[i], 0.f)};
+      g.colour = {colour.x, colour.y, colour.z, ply.opacity.values[i]};
       g.scale = {-ply.scale[0].values[i], -ply.scale[1].values[i], -ply.scale[2].values[i]};
       g.rot = {ply.rot[0].values[i], ply.rot[1].values[i], ply.rot[2].values[i], ply.rot[3].values[i]};
     } else {
@@ -173,7 +177,6 @@ int main(int argc, char** argv) {
 
   ipu_utils::logger()->info("Point bounds (eye space): {}", bbInCamera);
   auto projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
-  auto cameraTranslation = glm::mat4x4(1.f);
 
   ipuSplatter->updateModelView(modelView);
   ipuSplatter->updateProjection(projection);

@@ -293,7 +293,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   const auto tmFb = vg.getTileMapping(paddedFramebuffer);
   ipu_utils::logger()->info("Number of tiles: {}", tm.size());
 
-  unsigned numPoints = 120;
+  unsigned numPoints = 100;
   std::size_t channelSize = numPoints * grainSize;
 
   program::Sequence sortGaussians;
@@ -329,7 +329,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
       auto sliceFb = paddedFramebuffer.slice(mFb.front());
 
-      auto storage = vg.addVariable(poplar::FLOAT, {channelSize * 2});
+      auto storage = vg.addVariable(poplar::FLOAT, {channelSize });
       vg.setTileMapping(storage, t);
       auto gaussians = concat(ptsIn, storage);
 
