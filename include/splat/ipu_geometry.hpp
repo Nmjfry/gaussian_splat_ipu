@@ -133,10 +133,10 @@ struct Bounds2f {
   Bounds2f clip(const Bounds2f& fixedBound, directions& dirs) const {
     ivec2 topleft = min;
     ivec2 bottomright = max;
-    dirs.left = topleft.x < fixedBound.min.x;
-    dirs.up = topleft.y < fixedBound.min.y;
-    dirs.right = bottomright.x >= fixedBound.max.x;
-    dirs.down = bottomright.y >= fixedBound.max.y;
+    dirs.left = floor(topleft.x) < fixedBound.min.x;
+    dirs.up = floor(topleft.y) < fixedBound.min.y;
+    dirs.right = ceil(bottomright.x) >= fixedBound.max.x;
+    dirs.down = ceil(bottomright.y) >= fixedBound.max.y;
 
     if (dirs.left) {
       topleft.x = fixedBound.min.x;
