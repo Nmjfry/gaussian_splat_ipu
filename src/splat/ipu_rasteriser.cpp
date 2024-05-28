@@ -10,6 +10,7 @@
 
 #include <popops/codelets.hpp>
 #include <popops/TopK.hpp>
+#include <popops/Fill.hpp>
 
 #include <tileMapping/edge_builder.hpp>
 
@@ -285,24 +286,38 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   // Build a compute set to transform the points:
   const auto csName = disableAMPVertices ? "project" : "project_amp";
   auto splatCs = vg.addComputeSet(csName);
-
-  // auto cullCs = vg.addComputeSet("cull");
-
-  // Get the tile mapping and connect the vertices:
-  const auto tm = vg.getTileMapping(paddedInput);
-  const auto tmFb = vg.getTileMapping(paddedFramebuffer);
-  ipu_utils::logger()->info("Number of tiles: {}", tm.size());
+  auto cullCs = vg.addComputeSet("cull");
+  auto fillTids = vg.addComputeSet("fill_tids");
 
   unsigned numPoints = 100;
   std::size_t channelSize = numPoints * grainSize;
+  std::size_t extraStorageSize = channelSize;
 
+  // construct z-buffer program to sort the gaussians
   program::Sequence sortGaussians;
 
+  MappingInfo zBufferMapping = mapping;
+  zBufferMapping.elementsPerTile = (zBufferMapping.elementsPerTile + extraStorageSize) / grainSize;
+  std::size_t totalGaussianCapacity = (hostVertices.size() + mapping.padding + channelSize * zBufferMapping.totalTiles) / grainSize;
+  
+  const auto depths = vg.addVariable(poplar::UNSIGNED_INT, {totalGaussianCapacity}, "depths");
+  const auto indices = vg.addVariable(poplar::UNSIGNED_INT, {totalGaussianCapacity});
+  applyTileMapping(vg, depths, zBufferMapping);
+  applyTileMapping(vg, indices, zBufferMapping);
+
+
   std::vector<poplar::VertexRef> vertices;
+  // Get the tile mapping and connect the vertices:
+  const auto tm = vg.getTileMapping(paddedInput);
+  const auto tmFb = vg.getTileMapping(paddedFramebuffer);
+  const auto tmDepth = vg.getTileMapping(depths);
+  const auto tmIndices = vg.getTileMapping(indices);
 
   for (auto t = 0u; t < tm.size(); ++t) {
     const auto& m = tm[t];
     const auto& mFb = tmFb[t];
+    const auto& mDepth = tmDepth[t];
+    const auto& mIndices = tmIndices[t];
     if (m.size() > 1u) {
       throw std::runtime_error("Expected fb to be stored as a single contiguous region per tile.");
     }
@@ -321,43 +336,33 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       broadcastMvp.add(program::Copy(fxy, localFxy));
 
       auto ptsIn = paddedInput.slice(m.front());
-
-      Tensor tid = vg.addConstant<int>(INT, {1}, {int(t)});
-      vg.setTileMapping(tid, t);
-
-
-
       auto sliceFb = paddedFramebuffer.slice(mFb.front());
+      auto sliceDepth = depths.slice(mDepth.front());
+      auto sliceIdxs = indices.slice(mIndices.front());
 
-      auto storage = vg.addVariable(poplar::FLOAT, {channelSize });
+      popops::fill(vg, sliceDepth, t, fillTids, t);
+
+      auto storage = vg.addVariable(poplar::FLOAT, {extraStorageSize});
       vg.setTileMapping(storage, t);
       auto gaussians = concat(ptsIn, storage);
 
-      size_t totalGaussianStorage = (ptsIn.numElements() + storage.numElements()) / grainSize;
+      auto tid = vg.addConstant<int>(INT, {1}, {int(t)});
+      vg.setTileMapping(tid, t);
 
-      const auto depths = vg.addVariable(poplar::FLOAT, {totalGaussianStorage});
-      const auto indices = vg.addVariable(poplar::UNSIGNED_INT, {totalGaussianStorage});
-      vg.setTileMapping(depths, t);
-      vg.setTileMapping(indices, t);
-
-      // auto cull = vg.addVertex(cullCs, "CullGaussians");
-      // vg.setTileMapping(cull, t);
-      // vg.connect(cull["modelView"], localMv.flatten());
-      // vg.connect(cull["projection"], localProj.flatten());
-      // vg.connect(cull["vertsIn"], gaussians);
-      // vg.connect(cull["depths"], depths);
-      // vg.connect(cull["tile_id"], tid);
-
-      // const auto tk = popops::TopKParams(depths.numElements(), false, popops::SortOrder::DESCENDING);
-      // auto [ds, sortedIndices] = popops::topKWithPermutation(vg, sortGaussians, depths, tk);
-      // sortGaussians.add(program::Copy(sortedIndices, indices));
+      auto cull = vg.addVertex(cullCs, "CullGaussians");
+      vg.setTileMapping(cull, t);
+      vg.connect(cull["modelView"], localMv.flatten());
+      vg.connect(cull["projection"], localProj.flatten());
+      vg.connect(cull["vertsIn"], gaussians);
+      vg.connect(cull["depths"], sliceDepth);
+      vg.connect(cull["tile_id"], tid);
 
       auto v = vg.addVertex(splatCs, "GSplat");
       vg.setTileMapping(v, t);
       vg.connect(v["modelView"], localMv.flatten());
       vg.connect(v["projection"], localProj.flatten());
       vg.connect(v["vertsIn"], gaussians);
-      vg.connect(v["indices"], indices);
+      vg.connect(v["indices"], sliceIdxs);
       vg.connect(v["localFb"], sliceFb);
       vg.connect(v["fxy"], localFxy);
       vg.connect(v["tile_id"], tid);
@@ -365,17 +370,22 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
     }
   }
 
+  const auto tk = popops::TopKParams(depths.numElements(), false, popops::SortOrder::ASCENDING);
+  auto [ds, sortedIndices] = popops::topKWithPermutation(vg, sortGaussians, depths, tk);
+  sortGaussians.add(program::Copy(sortedIndices, indices));
+
   EdgeBuilder eb(vg, vertices, channelSize);
   eb.constructLattice(tm, fbMapping);
   // this program sequence will copy the points between all the tiles in the graph
   program::Sequence broadcastPoints = eb.getBroadcastSequence();
 
   program::Sequence main;
-  main.add(broadcastMvp);
-  // main.add(program::Execute(cullCs));
-  main.add(sortGaussians);
-  main.add(program::Execute(splatCs));
-  main.add(broadcastPoints);
+  main.add(broadcastMvp); // sends the model view and projection matrices to all tiles
+  main.add(program::Execute(fillTids)); // fills the depths tensor with the tile id
+  main.add(program::Execute(cullCs)); // writes the depth to lower bits of depth tensor
+  main.add(sortGaussians); // sorts the gaussians by depth and tid
+  main.add(program::Execute(splatCs)); // splats the gaussians
+  main.add(broadcastPoints); // broadcasts any misplaced gaussians to other tiles
 
   main.add(outputFramebuffer.buildRead(vg, true));
 

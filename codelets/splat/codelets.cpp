@@ -75,7 +75,7 @@ class CullGaussians : public poplar::MultiVertex {
 public:
 
   poplar::Input<poplar::Vector<float>> vertsIn;
-  poplar::Output<poplar::Vector<float>> depths;
+  poplar::Output<poplar::Vector<unsigned>> depths;
 
   poplar::Input<poplar::Vector<float>> modelView;
   poplar::Input<poplar::Vector<float>> projection;
@@ -83,16 +83,11 @@ public:
   poplar::Input<poplar::Vector<int>> tile_id;
 
   void cullInternal(const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
-    const auto tb = tfb.getTileBounds(tile_id[0]);
-    auto minfloat = -10000000.f;
-    // printf("minfloat: %f\n", minfloat);
-
     for (auto i = 0; i < vertsIn.size(); i+=sizeof(Gaussian3D)) {
       auto idx = i / sizeof(Gaussian3D);
       Gaussian3D g = unpack<Gaussian3D>(vertsIn, i);
 
       if (g.gid <= 0) {
-        depths[idx] = minfloat;
         continue;
       }
 
@@ -100,7 +95,14 @@ public:
       auto clipSpace = viewmatrix * glmMean;
 
       // perform near plane frustum culling
-      depths[idx] = (clipSpace.z > 0.f) ? minfloat : clipSpace.z;
+      if (clipSpace.z > 0.f) {
+        continue;
+      }
+
+      // write the depth value to the lower bits of tid float value
+      auto z = short(-clipSpace.z);
+      depths[idx] = (depths[idx] << sizeof(short));
+      depths[idx] |= *((unsigned*)(&z));
     }
   }
 
@@ -300,13 +302,15 @@ public:
                       2.0f * atanf(tfb.height / (2.0f * fxy[0])));
 
     // Traverse indirect indices of depth-sorted gaussians
-    // auto idx = 0u;
-    // for (; ; ++idx) {
-    //   auto i = indices[idx] * sizeof(Gaussian3D);
-    //   if (i >= buffer.size()) {
-    //     break;
-    //   }
-    for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
+    auto idx = 0u;
+    auto totalGaussians = 122;
+    auto offset = tile_id[0] * totalGaussians;
+    for (; ; ++idx) {
+      auto i = (indices[idx] - offset) * sizeof(Gaussian3D);
+      if (i >= buffer.size()) {
+        break;
+      }
+    // for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
 
       Gaussian3D g = unpack<Gaussian3D>(buffer, i);
       if (g.gid <= 0 || g.colour.w < 0.1f) {
@@ -448,7 +452,6 @@ public:
       return true;
     }
 
-
     // construct mapping from tile to framebuffer
     const TiledFramebuffer tfb(IPU_TILEWIDTH, IPU_TILEHEIGHT);
     const splat::Viewport vp(0.0f, 0.0f, IMWIDTH, IMHEIGHT);
@@ -464,7 +467,7 @@ public:
     
     renderInternal(vertsIn, projmatrix, viewmatrix, tfb, vp);
 
-    return true;
+      return true;
   }
  
 };
