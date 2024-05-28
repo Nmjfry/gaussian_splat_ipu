@@ -124,7 +124,7 @@ int main(int argc, char** argv) {
   // make fb.numTiles copies of a 2D gaussian
   splat::Gaussians gsns;
   ipu_utils::logger()->info("Generating {} gaussians", pts.size());
-  
+
 
   // (/ 1.0 (* 2.0 (sqrt pi)))
   const float SH_C0 = 0.28209479177387814f;
@@ -134,9 +134,11 @@ int main(int argc, char** argv) {
     splat::Gaussian3D g;
     g.mean = {pt.x, pt.y, pt.z, 1.f};
     if (ply.f_dc[0].values.size() > 0) {
-      glm::vec3 colour = {std::max(SH_C0 * ply.f_dc[0].values[i], 0.f),
-                          std::max(SH_C0 * ply.f_dc[1].values[i], 0.f),
-                          std::max(SH_C0 * ply.f_dc[2].values[i], 0.f)};
+      glm::vec3 colour = {SH_C0 * ply.f_dc[0].values[i],
+                          SH_C0 * ply.f_dc[1].values[i],
+                          SH_C0 * ply.f_dc[2].values[i]};
+      colour += 0.5f;
+      colour = glm::clamp(colour, 0.f);
       g.colour = {colour.x, colour.y, colour.z, 1000.f};// ply.opacity.values[i]};
       g.scale = {-ply.scale[0].values[i], -ply.scale[1].values[i], -ply.scale[2].values[i]};
       g.rot = {ply.rot[0].values[i], ply.rot[1].values[i], ply.rot[2].values[i], ply.rot[3].values[i]};
@@ -167,7 +169,7 @@ int main(int argc, char** argv) {
   }
 
   // Set up the modelling and projection transforms in an OpenGL compatible way:
-  auto modelView = splat::lookAtBoundingBox(bb, glm::vec3(0.f , 1.f, 0.f), 3.f);
+  auto modelView = splat::lookAtBoundingBox(bb, glm::vec3(0.f , 1.f, 0.f), 1.f);
 
   // Transform the BB to camera/eye space:
   splat::Bounds3f bbInCamera(
