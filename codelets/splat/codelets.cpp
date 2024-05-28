@@ -83,11 +83,14 @@ public:
   poplar::Input<poplar::Vector<int>> tile_id;
 
   void cullInternal(const glm::mat4& viewmatrix, const TiledFramebuffer& tfb, const splat::Viewport& vp) {
+    // float max = -1.0f;
     for (auto i = 0; i < vertsIn.size(); i+=sizeof(Gaussian3D)) {
       auto idx = i / sizeof(Gaussian3D);
       Gaussian3D g = unpack<Gaussian3D>(vertsIn, i);
+      depths[idx] <<= 16;
 
       if (g.gid <= 0) {
+        // depths[idx] |= *((unsigned short*)(&max));
         continue;
       }
 
@@ -96,13 +99,13 @@ public:
 
       // perform near plane frustum culling
       if (clipSpace.z > 0.f) {
+        // depths[idx] |= *((unsigned short*)(&max));
         continue;
       }
 
       // write the depth value to the lower bits of tid float value
-      auto z = short(-clipSpace.z);
-      depths[idx] = (depths[idx] << sizeof(short));
-      depths[idx] |= *((unsigned*)(&z));
+      auto z = -clipSpace.z;
+      depths[idx] |= *((unsigned short*)(&z));
     }
   }
 
@@ -165,9 +168,9 @@ public:
     ivec4 pixel;
     unsigned idx = toByteBufferIndex(x, y);
     memcpy(&pixel, &localFb[idx], sizeof(pixel));
-    // if (pixel.w >= 0.99f) {
-    //   return;
-    // }
+    if (pixel.w > 100.f) {
+      return;
+    }
     pixel = pixel + colour;
     memcpy(&localFb[idx], &pixel, sizeof(pixel));
   }
@@ -313,13 +316,29 @@ public:
     // for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
 
       Gaussian3D g = unpack<Gaussian3D>(buffer, i);
-      if (g.gid <= 0 || g.colour.w < 0.1f) {
+      if (g.gid <= 0 || g.colour.w < 0.1f ||
+         (g.colour.x <= 0.0f && g.colour.y <= 0.0f && g.colour.z <= 0.0f)) {
         continue;
       }
 
       auto clipSpace = mvp * glm::vec4(g.mean.x, g.mean.y, g.mean.z, g.mean.w);
       auto projMean = vp.clipSpaceToViewport(clipSpace);
       bool notAnchored = !tb.contains(ivec2{projMean.x, projMean.y});
+
+      // render and clip, send to the halo region around the current tile
+      ivec3 cov2D = g.ComputeCov2D(projmatrix, viewmatrix, tanfov.x, tanfov.y);
+      Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
+      auto bb = g2D.GetBoundingBox();
+
+      directions dirs;
+
+      bool withinGuardBand = bb.diagonal().length() < tb.diagonal().length() * 8;
+
+      if (withinGuardBand) {
+        bb = bb.clip(tb, dirs);
+      }
+
+      bool ok = true;
 
       if (notAnchored) {
         // evict and send on to the next tile
@@ -331,20 +350,15 @@ public:
           // guard against losing a gaussian, put it right back in the buffer
           insertAt(vertsIn, i, g);
         }
-
       } else {
-        // render and clip, send to the halo region around the current tile
-        ivec3 cov2D = g.ComputeCov2D(projmatrix, viewmatrix, tanfov.x, tanfov.y);
-        Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
-        auto bb = g2D.GetBoundingBox();
+        ok = send(g, dirs);
+      }
 
-        if (bb.diagonal().length() < tb.diagonal().length() * 5) {
-          directions dirs;
-          bb = bb.clip(tb, dirs);
-          send(g, dirs);
-          rasterise(g2D, bb, tb);
-        }
-      } 
+      if (withinGuardBand && ok) {
+        rasterise(g2D, bb, tb);
+      }
+
+
     }
   }
 
@@ -365,7 +379,8 @@ public:
     // Iterate over the input channel and unpack the Gaussian3D structs
     for (auto i = 0; i < bufferIn.size(); i+=sizeof(Gaussian3D)) {
       Gaussian3D g = unpack<Gaussian3D>(bufferIn, i);
-      if (g.gid <= 0 || g.colour.w < 0.1f) {
+      if (g.gid <= 0 || g.colour.w < 0.1f || 
+          (g.colour.x <= 0.0f && g.colour.y <= 0.0f && g.colour.z <= 0.0f)) {
         // gid 0 if the place in the buffer is not occupied,
         // since the channels are filled from the front we can break
         // when we hit an empty slot
@@ -410,14 +425,15 @@ public:
       // we need to render and pass it on until the extent is fully rendered.
       auto bb = g2D.GetBoundingBox();
 
-      if (bb.diagonal().length() < tb.diagonal().length() * 5) {
+      if (bb.diagonal().length() < tb.diagonal().length() * 8) {
         directions sendTo;
         auto clippedBB = bb.clip(tb, sendTo);
         protocol<Gaussian3D>(g, sendTo, recievedFrom);
-        rasterise(g2D, clippedBB, tb);
+        // rasterise(g2D, clippedBB, tb);
       }
-
       bool overflow = !insert(vertsIn, g);
+
+
     }
   } 
 
@@ -460,12 +476,13 @@ public:
     const auto viewmatrix = glm::transpose(glm::make_mat4(&modelView[0]));
     const auto projmatrix = glm::transpose(glm::make_mat4(&projection[0]));
 
+    renderInternal(vertsIn, projmatrix, viewmatrix, tfb, vp);
+
     readInput(rightIn, direction::right, projmatrix, viewmatrix, tfb, vp);
     readInput(leftIn, direction::left, projmatrix, viewmatrix, tfb, vp);
     readInput(upIn, direction::up, projmatrix, viewmatrix, tfb, vp);
     readInput(downIn, direction::down, projmatrix, viewmatrix, tfb, vp);
     
-    renderInternal(vertsIn, projmatrix, viewmatrix, tfb, vp);
 
       return true;
   }

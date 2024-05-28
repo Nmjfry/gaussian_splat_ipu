@@ -381,11 +381,11 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
   program::Sequence main;
   main.add(broadcastMvp); // sends the model view and projection matrices to all tiles
+  main.add(program::Execute(splatCs)); // splats the gaussians
+  main.add(broadcastPoints); // broadcasts any misplaced gaussians to other tiles
   main.add(program::Execute(fillTids)); // fills the depths tensor with the tile id
   main.add(program::Execute(cullCs)); // writes the depth to lower bits of depth tensor
   main.add(sortGaussians); // sorts the gaussians by depth and tid
-  main.add(program::Execute(splatCs)); // splats the gaussians
-  main.add(broadcastPoints); // broadcasts any misplaced gaussians to other tiles
 
   main.add(outputFramebuffer.buildRead(vg, true));
 
