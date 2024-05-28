@@ -124,7 +124,7 @@ int main(int argc, char** argv) {
   // make fb.numTiles copies of a 2D gaussian
   splat::Gaussians gsns;
   ipu_utils::logger()->info("Generating {} gaussians", pts.size());
-
+  
 
   // (/ 1.0 (* 2.0 (sqrt pi)))
   const float SH_C0 = 0.28209479177387814f;
@@ -137,7 +137,7 @@ int main(int argc, char** argv) {
       glm::vec3 colour = {std::max(SH_C0 * ply.f_dc[0].values[i], 0.f),
                           std::max(SH_C0 * ply.f_dc[1].values[i], 0.f),
                           std::max(SH_C0 * ply.f_dc[2].values[i], 0.f)};
-      g.colour = {colour.x, colour.y, colour.z, ply.opacity.values[i]};
+      g.colour = {colour.x, colour.y, colour.z, 1000.f};// ply.opacity.values[i]};
       g.scale = {-ply.scale[0].values[i], -ply.scale[1].values[i], -ply.scale[2].values[i]};
       g.rot = {ply.rot[0].values[i], ply.rot[1].values[i], ply.rot[2].values[i], ply.rot[3].values[i]};
     } else {
