@@ -129,16 +129,15 @@ int main(int argc, char** argv) {
   // (/ 1.0 (* 2.0 (sqrt pi)))
   const float SH_C0 = 0.28209479177387814f;
   
-  for (std::size_t i = 0; i < pts.size(); i+=2) {
+  for (std::size_t i = 0; i < pts.size(); ++i) {
     auto pt = pts[i].p;
     splat::Gaussian3D g;
     g.mean = {pt.x, pt.y, pt.z, 1.f};
     if (ply.f_dc[0].values.size() > 0) {
-      glm::vec3 colour = {SH_C0 * ply.f_dc[0].values[i],
-                          SH_C0 * ply.f_dc[1].values[i],
-                          SH_C0 * ply.f_dc[2].values[i]};
-      colour += 0.5f;
-      colour = glm::clamp(colour, 0.f);
+      glm::vec3 colour = {std::max(SH_C0 * ply.f_dc[0].values[i], 0.f),
+                      std::max(SH_C0 * ply.f_dc[1].values[i], 0.f),
+                      std::max(SH_C0 * ply.f_dc[2].values[i], 0.f)};
+      // colour = glm::clamp(colour, 0.f);
       g.colour = {colour.x, colour.y, colour.z, 1000.f};// ply.opacity.values[i]};
       g.scale = {-ply.scale[0].values[i], -ply.scale[1].values[i], -ply.scale[2].values[i]};
       g.rot = {ply.rot[0].values[i], ply.rot[1].values[i], ply.rot[2].values[i], ply.rot[3].values[i]};

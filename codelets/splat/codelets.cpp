@@ -306,7 +306,7 @@ public:
 
     // Traverse indirect indices of depth-sorted gaussians
     auto idx = 0u;
-    auto totalGaussians = 122;
+    auto totalGaussians = indices.size();
     auto offset = tile_id[0] * totalGaussians;
     for (; ; ++idx) {
       auto i = (indices[idx] - offset) * sizeof(Gaussian3D);
