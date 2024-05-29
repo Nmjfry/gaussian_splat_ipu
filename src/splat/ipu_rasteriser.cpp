@@ -370,7 +370,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
     }
   }
 
-  const auto tk = popops::TopKParams(depths.numElements(), false, popops::SortOrder::ASCENDING);
+  const auto tk = popops::TopKParams(depths.numElements(), false, popops::SortOrder::DESCENDING);
   auto [ds, sortedIndices] = popops::topKWithPermutation(vg, sortGaussians, depths, tk);
   sortGaussians.add(program::Copy(sortedIndices, indices));
 
