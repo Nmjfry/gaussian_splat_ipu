@@ -144,6 +144,7 @@ public:
   
   poplar::InOut<poplar::Vector<float>> vertsIn;
   poplar::InOut<poplar::Vector<unsigned>> indices;
+  poplar::Output<poplar::Vector<float>> gaus2D;
 
   poplar::Output<poplar::Vector<float>> localFb;
 
@@ -168,9 +169,6 @@ public:
     ivec4 pixel;
     unsigned idx = toByteBufferIndex(x, y);
     memcpy(&pixel, &localFb[idx], sizeof(pixel));
-    if (pixel.w > 100.f) {
-      return;
-    }
     pixel = pixel + colour;
     memcpy(&localFb[idx], &pixel, sizeof(pixel));
   }
@@ -280,6 +278,56 @@ public:
     return false;
   }
 
+  void renderTile(const size_t numGaussians, const Bounds2f& tileBounds, unsigned workerId = 0u) {
+    for (auto i = tileBounds.min.x; i < tileBounds.max.x; ++i) {
+      for (auto j = tileBounds.min.y; j < tileBounds.max.y; ++j) {
+
+        float T = 1.0f;
+        glm::vec4 colour;
+
+        ivec2 pixf = {(float) i, (float) j};
+
+        for (auto gi = 0u; gi < numGaussians; ++gi) {
+          Gaussian2D g = unpack<Gaussian2D>(gaus2D, gi * sizeof(Gaussian2D));
+          if (!g.inside(pixf.x, pixf.y)) {
+            continue;
+          }
+          glm::vec4 gCont = {g.colour.x, g.colour.y, g.colour.z, g.colour.w};
+          ivec4 con_o = g.ComputeConicOpacity();
+          if (con_o.w < 0.1f) {
+            continue;
+          }
+          ivec2 xy = g.mean;
+          ivec2 d = {pixf.x - xy.x, pixf.y - xy.y};
+          float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
+          if (power > 0.0f) {
+            continue;
+          }
+
+          float alpha = glm::min(0.99f, con_o.w * exp(power));
+          if (alpha < 1.0f / 255.0f) {
+            continue;
+          }
+          
+          float test_T = T * (1 - alpha);
+          if (test_T < 0.0001f) {
+              break;
+          }
+
+          colour += gCont * alpha * T;
+
+          T = test_T;
+        }
+
+
+        // stop blending and apply colour to pixel 
+        ivec4 pixel = {colour.x, colour.y, colour.z, colour.w};
+        auto pxTs = viewspaceToTile(pixf, tileBounds.min);
+        setPixel(pxTs.x, pxTs.y, pixel);
+      }
+    }
+  }
+
   unsigned rasterise(const Gaussian2D &g, const Bounds2f& bb, const Bounds2f& tb) {
     auto count = 0u;
     auto centre = glm::vec2(g.mean.x, g.mean.y);
@@ -308,6 +356,7 @@ public:
     auto idx = 0u;
     auto totalGaussians = indices.size();
     auto offset = tile_id[0] * totalGaussians;
+    auto toRender = 0u;
     for (; ; ++idx) {
       auto i = (indices[idx] - offset) * sizeof(Gaussian3D);
       if (i >= buffer.size()) {
@@ -355,11 +404,22 @@ public:
       }
 
       if (withinGuardBand && ok) {
-        rasterise(g2D, bb, tb);
+        // rasterise(g2D, bb, tb);
+        auto g2Idx = toRender * sizeof(Gaussian2D);
+        insertAt(gaus2D, g2Idx, g2D);
+        toRender++;
       }
 
-
     }
+
+    for (auto i = 0u; i < toRender; ++i) {
+      auto g2D = unpack<Gaussian2D>(gaus2D, i * sizeof(Gaussian2D));
+      auto bb = g2D.GetBoundingBox().clip(tb);
+      rasterise(g2D, bb, tb);
+    }
+    // printf("To render: %d\n", toRender);
+
+    // renderTile(toRender, tb);
   }
 
   void readInput(poplar::Input<poplar::Vector<float>> &bufferIn,

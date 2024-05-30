@@ -18,16 +18,16 @@ struct ivec4 {
   float y;
   float z;
   float w;
-  struct ivec4 operator+(ivec4 const &other) {
+  struct ivec4 operator+(ivec4 const &other) const {
     return {x + other.x, y + other.y, z + other.z, w + other.w};
   }
-  struct ivec4 operator-(ivec4 const &other) {
+  struct ivec4 operator-(ivec4 const &other) const {
     return {x - other.x, y - other.y, z - other.z, w - other.w};
   }
-  struct ivec4 operator*(float const &scalar) {
+  struct ivec4 operator*(float &scalar) const {
     return {x * scalar, y * scalar, z * scalar, w * scalar};
   }
-  bool operator==(ivec4 const &other) {
+  bool operator==(ivec4 const &other) const {
     return x == other.x && y == other.y && z == other.z && w == other.w;
   }
 };
@@ -230,11 +230,13 @@ struct square : Primitive {
 };
 
 struct Gaussian2D {
-  ivec2 mean; // in screen space
   ivec4 colour; // RGBA colour space
   ivec3 cov2D;
+  ivec2 mean; // in screen space
 
   Gaussian2D(ivec2 _mean, ivec4 _colour, ivec3 _cov2D) : mean(_mean), colour(_colour), cov2D(_cov2D) {}
+
+  Gaussian2D() {}
 
   static float max(float a, float b) {
     return a > b ? a : b;
@@ -266,6 +268,16 @@ struct Gaussian2D {
     auto dxMax = glm::sqrt(dd * (c * c) + DD * (s * s));
     auto dyMax = glm::sqrt(dd * (s * s) + DD * (c * c));
     return Bounds2f({mean.x - dxMax, mean.y - dyMax}, {mean.x + dxMax, mean.y + dyMax});
+  }
+
+  ivec4 ComputeConicOpacity() const {
+    // Invert covariance (EWA algorithm)
+    float det = (cov2D.x * cov2D.z - cov2D.y * cov2D.y);
+    if (det == 0.0f)
+      return {0.f, 0.f, 0.f, 0.f};
+    float det_inv = 1.f / det;
+    ivec4 conic = { cov2D.z * det_inv, -cov2D.y * det_inv, cov2D.x * det_inv, colour.w };
+    return conic;
   }
 
   // Pixel test to see if a pixel is inside the gaussian

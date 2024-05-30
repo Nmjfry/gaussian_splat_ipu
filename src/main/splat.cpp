@@ -103,6 +103,9 @@ int main(int argc, char** argv) {
   auto imagePtrBuffered = std::make_unique<cv::Mat>(imagePtr->rows, imagePtr->cols, CV_8UC3);
   const float aspect = imagePtr->cols / (float)imagePtr->rows;
 
+  //Bb size
+  ipu_utils::logger()->info("BB size: {}", bb.diagonal().length());
+
 
   // Construct some tiled framebuffer histograms:
   splat::TiledFramebuffer fb(imagePtr->cols, imagePtr->rows, IPU_TILEWIDTH, IPU_TILEHEIGHT);
@@ -139,7 +142,7 @@ int main(int argc, char** argv) {
                       SH_C0 * ply.f_dc[2].values[i]};
       colour += 0.5f;
       colour = glm::max(colour, glm::vec3(0.f));
-      g.colour = {colour.x, colour.y, colour.z, 1000.f};// ply.opacity.values[i]};
+      g.colour = {colour.x, colour.y, colour.z, ply.opacity.values[i]};
       g.scale = {-ply.scale[0].values[i], -ply.scale[1].values[i], -ply.scale[2].values[i]};
       g.rot = {ply.rot[0].values[i], ply.rot[1].values[i], ply.rot[2].values[i], ply.rot[3].values[i]};
     } else {

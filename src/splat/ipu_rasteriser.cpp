@@ -340,11 +340,14 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       auto sliceDepth = depths.slice(mDepth.front());
       auto sliceIdxs = indices.slice(mIndices.front());
 
-      popops::fill(vg, sliceDepth, t, fillTids, t);
+      popops::fill(vg, sliceDepth, t, fillTids, unsigned(tm.size()) - t);
 
       auto storage = vg.addVariable(poplar::FLOAT, {extraStorageSize});
       vg.setTileMapping(storage, t);
       auto gaussians = concat(ptsIn, storage);
+
+      auto gaus2D = vg.addVariable(poplar::FLOAT, {sliceIdxs.numElements() * sizeof(Gaussian2D)});
+      vg.setTileMapping(gaus2D, t);
 
       auto tid = vg.addConstant<int>(INT, {1}, {int(t)});
       vg.setTileMapping(tid, t);
@@ -363,6 +366,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       vg.connect(v["projection"], localProj.flatten());
       vg.connect(v["vertsIn"], gaussians);
       vg.connect(v["indices"], sliceIdxs);
+      vg.connect(v["gaus2D"], gaus2D);
       vg.connect(v["localFb"], sliceFb);
       vg.connect(v["fxy"], localFxy);
       vg.connect(v["tile_id"], tid);
