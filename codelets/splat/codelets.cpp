@@ -90,7 +90,6 @@ public:
       depths[idx] <<= 16;
 
       if (g.gid <= 0) {
-        // depths[idx] |= *((unsigned short*)(&max));
         continue;
       }
 
@@ -99,13 +98,18 @@ public:
 
       // perform near plane frustum culling
       if (clipSpace.z > 0.f) {
-        // depths[idx] |= *((unsigned short*)(&max));
         continue;
       }
 
       // write the depth value to the lower bits of tid float value
-      auto z = -clipSpace.z;
-      depths[idx] |= *((unsigned short*)(&z));
+      auto z = half(-clipSpace.z);
+      unsigned key;
+      memcpy(&key, &z, sizeof(z));
+      key >>= 16;
+      key |= depths[idx];
+
+
+      depths[idx] = key;
     }
   }
 
@@ -169,6 +173,9 @@ public:
     ivec4 pixel;
     unsigned idx = toByteBufferIndex(x, y);
     memcpy(&pixel, &localFb[idx], sizeof(pixel));
+    // if (pixel.w > 0.f) {
+    //   return;
+    // }
     pixel = pixel + colour;
     memcpy(&localFb[idx], &pixel, sizeof(pixel));
   }
@@ -283,15 +290,15 @@ public:
       for (auto j = tileBounds.min.y; j < tileBounds.max.y; ++j) {
 
         float T = 1.0f;
-        glm::vec4 colour;
-
-        ivec2 pixf = {(float) i, (float) j};
+        glm::vec4 colour = {0.0f, 0.0f, 0.0f, 0.0f};
+        glm::vec2 pixf = {(float) i, (float) j};
 
         for (auto gi = 0u; gi < numGaussians; ++gi) {
           Gaussian2D g = unpack<Gaussian2D>(gaus2D, gi * sizeof(Gaussian2D));
-          if (!g.inside(pixf.x, pixf.y)) {
-            continue;
-          }
+         
+          // if (!g.inside(pixf.x, pixf.y)) {
+          //   continue;
+          // }
           glm::vec4 gCont = {g.colour.x, g.colour.y, g.colour.z, g.colour.w};
           ivec4 con_o = g.ComputeConicOpacity();
           if (con_o.w < 0.1f) {
@@ -309,20 +316,19 @@ public:
             continue;
           }
           
-          float test_T = T * (1 - alpha);
+          float test_T = T * (1.f - alpha);
           if (test_T < 0.0001f) {
               break;
           }
 
           colour += gCont * alpha * T;
-
           T = test_T;
         }
 
 
         // stop blending and apply colour to pixel 
         ivec4 pixel = {colour.x, colour.y, colour.z, colour.w};
-        auto pxTs = viewspaceToTile(pixf, tileBounds.min);
+        auto pxTs = viewspaceToTile({pixf.x, pixf.y}, tileBounds.min);
         setPixel(pxTs.x, pxTs.y, pixel);
       }
     }
@@ -400,20 +406,20 @@ public:
       }
 
       if (withinGuardBand && ok) {
-        // rasterise(g2D, bb, tb);
         auto g2Idx = toRender * sizeof(Gaussian2D);
         insertAt(gaus2D, g2Idx, g2D);
         toRender++;
       }
     }
 
-    for (auto i = 0u; i < toRender; ++i) {
-      auto g2D = unpack<Gaussian2D>(gaus2D, i * sizeof(Gaussian2D));
-      auto bb = g2D.GetBoundingBox().clip(tb);
-      rasterise(g2D, bb, tb);
+    // for (auto i = 0u; i < toRender; ++i) {
+    //   auto g2D = unpack<Gaussian2D>(gaus2D, i * sizeof(Gaussian2D));
+    //   auto bb = g2D.GetBoundingBox().clip(tb);
+    //   rasterise(g2D, bb, tb);
+    // }
+    if (toRender > 0) {
+      renderTile(toRender, tb);
     }
-
-    // renderTile(toRender, tb);
   }
 
   void readInput(poplar::Input<poplar::Vector<float>> &bufferIn,
