@@ -365,31 +365,29 @@ public:
     // for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
 
       Gaussian3D g = unpack<Gaussian3D>(buffer, i);
-      if (g.gid <= 0 || g.colour.w < 0.1f ||
-         (g.colour.x <= 0.0f && g.colour.y <= 0.0f && g.colour.z <= 0.0f)) {
+      if (g.gid <= 0) {
         continue;
       }
 
       auto clipSpace = mvp * glm::vec4(g.mean.x, g.mean.y, g.mean.z, g.mean.w);
       auto projMean = vp.clipSpaceToViewport(clipSpace);
-      bool notAnchored = !tb.contains(ivec2{projMean.x, projMean.y});
 
       // render and clip, send to the halo region around the current tile
       ivec3 cov2D = g.ComputeCov2D(projmatrix, viewmatrix, tanfov.x, tanfov.y);
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
       auto bb = g2D.GetBoundingBox();
 
-      directions dirs;
-
       bool withinGuardBand = bb.diagonal().length() < tb.diagonal().length() * 8;
 
+      directions dirs;
       if (withinGuardBand) {
         bb = bb.clip(tb, dirs);
       }
 
       bool ok = true;
-
-      if (notAnchored) {
+      if (tb.contains(g2D.mean)) {
+        ok = send(g, dirs);
+      } else {
         // evict and send on to the next tile
         auto dstTile = tfb.pixCoordToTile(projMean.y, projMean.x);
         auto dstCentre = tfb.getTileBounds(dstTile).centroid();
@@ -399,8 +397,6 @@ public:
           // guard against losing a gaussian, put it right back in the buffer
           insertAt(vertsIn, i, g);
         }
-      } else {
-        ok = send(g, dirs);
       }
 
       if (withinGuardBand && ok) {
@@ -409,7 +405,6 @@ public:
         insertAt(gaus2D, g2Idx, g2D);
         toRender++;
       }
-
     }
 
     for (auto i = 0u; i < toRender; ++i) {
@@ -417,7 +412,6 @@ public:
       auto bb = g2D.GetBoundingBox().clip(tb);
       rasterise(g2D, bb, tb);
     }
-    // printf("To render: %d\n", toRender);
 
     // renderTile(toRender, tb);
   }
@@ -439,8 +433,7 @@ public:
     // Iterate over the input channel and unpack the Gaussian3D structs
     for (auto i = 0; i < bufferIn.size(); i+=sizeof(Gaussian3D)) {
       Gaussian3D g = unpack<Gaussian3D>(bufferIn, i);
-      if (g.gid <= 0 || g.colour.w < 0.1f || 
-          (g.colour.x <= 0.0f && g.colour.y <= 0.0f && g.colour.z <= 0.0f)) {
+      if (g.gid <= 0) {
         // gid 0 if the place in the buffer is not occupied,
         // since the channels are filled from the front we can break
         // when we hit an empty slot
@@ -489,10 +482,8 @@ public:
         directions sendTo;
         auto clippedBB = bb.clip(tb, sendTo);
         protocol<Gaussian3D>(g, sendTo, recievedFrom);
-        // rasterise(g2D, clippedBB, tb);
       }
       bool overflow = !insert(vertsIn, g);
-
 
     }
   } 
