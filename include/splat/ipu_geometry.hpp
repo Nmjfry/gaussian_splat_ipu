@@ -232,9 +232,10 @@ struct square : Primitive {
 struct Gaussian2D {
   ivec4 colour; // RGBA colour space
   ivec3 cov2D;
-  ivec2 mean; // in screen space
+  ivec2 mean; // in screen space 
+  float z;
 
-  Gaussian2D(ivec2 _mean, ivec4 _colour, ivec3 _cov2D) : mean(_mean), colour(_colour), cov2D(_cov2D) {}
+  Gaussian2D(ivec2 _mean, ivec4 _colour, ivec3 _cov2D, float z) : mean(_mean), colour(_colour), cov2D(_cov2D), z(z) {}
 
   Gaussian2D() {}
 

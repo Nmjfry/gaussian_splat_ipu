@@ -286,22 +286,20 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   // Build a compute set to transform the points:
   const auto csName = disableAMPVertices ? "project" : "project_amp";
   auto splatCs = vg.addComputeSet(csName);
-  auto cullCs = vg.addComputeSet("cull");
-  auto fillTids = vg.addComputeSet("fill_tids");
 
   unsigned numPoints = 100;
   std::size_t channelSize = numPoints * grainSize;
-  std::size_t extraStorageSize = channelSize;
+  std::size_t extraStorageSize = channelSize * 3;
 
   // construct z-buffer program to sort the gaussians
   program::Sequence sortGaussians;
 
   MappingInfo zBufferMapping = mapping;
   zBufferMapping.elementsPerTile = (zBufferMapping.elementsPerTile + extraStorageSize) / grainSize;
-  std::size_t totalGaussianCapacity = (hostVertices.size() + mapping.padding + channelSize * zBufferMapping.totalTiles) / grainSize;
+  std::size_t totalGaussianCapacity = (hostVertices.size() + mapping.padding + extraStorageSize * zBufferMapping.totalTiles) / grainSize;
   
   const auto depths = vg.addVariable(poplar::UNSIGNED_INT, {totalGaussianCapacity}, "depths");
-  const auto indices = vg.addVariable(poplar::UNSIGNED_INT, {totalGaussianCapacity});
+  const auto indices = vg.addVariable(poplar::INT, {totalGaussianCapacity});
   applyTileMapping(vg, depths, zBufferMapping);
   applyTileMapping(vg, indices, zBufferMapping);
 
@@ -337,10 +335,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
       auto ptsIn = paddedInput.slice(m.front());
       auto sliceFb = paddedFramebuffer.slice(mFb.front());
-      auto sliceDepth = depths.slice(mDepth.front());
       auto sliceIdxs = indices.slice(mIndices.front());
-
-      popops::fill(vg, sliceDepth, t, fillTids, unsigned(tm.size()) - t);
 
       auto storage = vg.addVariable(poplar::FLOAT, {extraStorageSize});
       vg.setTileMapping(storage, t);
@@ -351,14 +346,6 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 
       auto tid = vg.addConstant<int>(INT, {1}, {int(t)});
       vg.setTileMapping(tid, t);
-
-      auto cull = vg.addVertex(cullCs, "CullGaussians");
-      vg.setTileMapping(cull, t);
-      vg.connect(cull["modelView"], localMv.flatten());
-      vg.connect(cull["projection"], localProj.flatten());
-      vg.connect(cull["vertsIn"], gaussians);
-      vg.connect(cull["depths"], sliceDepth);
-      vg.connect(cull["tile_id"], tid);
 
       auto v = vg.addVertex(splatCs, "GSplat");
       vg.setTileMapping(v, t);
@@ -374,9 +361,6 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
     }
   }
 
-  const auto tk = popops::TopKParams(depths.numElements(), false, popops::SortOrder::DESCENDING);
-  auto [ds, sortedIndices] = popops::topKWithPermutation(vg, sortGaussians, depths, tk);
-  sortGaussians.add(program::Copy(sortedIndices, indices));
 
   EdgeBuilder eb(vg, vertices, channelSize);
   eb.constructLattice(tm, fbMapping);
@@ -387,9 +371,6 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   main.add(broadcastMvp); // sends the model view and projection matrices to all tiles
   main.add(program::Execute(splatCs)); // splats the gaussians
   main.add(broadcastPoints); // broadcasts any misplaced gaussians to other tiles
-  main.add(program::Execute(fillTids)); // fills the depths tensor with the tile id
-  main.add(program::Execute(cullCs)); // writes the depth to lower bits of depth tensor
-  main.add(sortGaussians); // sorts the gaussians by depth and tid
 
   main.add(outputFramebuffer.buildRead(vg, true));
 

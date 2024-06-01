@@ -102,14 +102,15 @@ public:
       }
 
       // write the depth value to the lower bits of tid float value
-      auto z = half(-clipSpace.z);
-      unsigned key;
-      memcpy(&key, &z, sizeof(z));
-      key >>= 16;
-      key |= depths[idx];
+      // auto z = half(-clipSpace.z);
+      // unsigned key;
+      // memcpy(&key, &z, sizeof(z));
+      // key >>= 16;
+      // key |= depths[idx];
 
-
-      depths[idx] = key;
+      auto z = -clipSpace.z;
+      depths[idx] |= *(unsigned*)&z;
+      // depths[idx] = key;
     }
   }
 
@@ -138,7 +139,9 @@ public:
 // This is here as a reference to show what the
 // accumulating matrix product (AMP) engine assembly
 // vertices below are doing.
+
 class GSplat : public poplar::MultiVertex {
+
 public:
   poplar::Input<poplar::Vector<float>> modelView;
   poplar::Input<poplar::Vector<float>> projection;
@@ -147,7 +150,7 @@ public:
   poplar::Input<poplar::Vector<float>> fxy;
   
   poplar::InOut<poplar::Vector<float>> vertsIn;
-  poplar::InOut<poplar::Vector<unsigned>> indices;
+  poplar::Output<poplar::Vector<int>> indices;
   poplar::Output<poplar::Vector<float>> gaus2D;
 
   poplar::Output<poplar::Vector<float>> localFb;
@@ -285,7 +288,73 @@ public:
     return false;
   }
 
+  template <typename G>
+  void swap(float *a, float *b) {
+    G temp;
+    std::memcpy(&temp, a, sizeof(G));
+    std::memcpy(a, b, sizeof(G));
+    std::memcpy(b, &temp, sizeof(G));
+  }
+
+  template <typename G>
+  int partition(float *elements, int low, int high) {
+    high = high * sizeof(G);
+    low = low * sizeof(G);
+    G pivotG;
+    std::memcpy(&pivotG, &elements[high], sizeof(G));
+    float pivot = pivotG.z;
+    int i = low - sizeof(G);
+    for (int j = low; j <= high - sizeof(G); j+=sizeof(G)) {
+        G gm;
+        std::memcpy(&gm, &elements[j], sizeof(G));
+        if (gm.z <= pivotG.z) {
+            i+=sizeof(G);
+            swap<G>(&elements[i], &elements[j]);
+        }
+    }
+    swap<G>(&elements[i + sizeof(G)], &elements[high]);
+    return (i + sizeof(G)) / sizeof(G);
+  }
+
+  template <typename G>
+  void iterativeQuickSort(float *elements, int l, int h) {
+      int top = -1;
+      indices[++top] = l;
+      indices[++top] = h;
+      while (top >= 0) {
+          h = indices[top--];
+          l = indices[top--];
+      
+          int pi = partition<G>(elements, l, h);
+
+          if (pi - 1 > l) {
+              indices[++top] = l;
+              indices[++top] = pi - 1;
+          }
+
+          if (pi + 1 < h) {
+              indices[++top] = pi + 1;
+              indices[++top] = h;
+          }
+      }
+  }
+
+  template<typename G>
+  void sortBuffer(poplar::Vector<float>& buffer, unsigned end, unsigned workerId = 0u) {
+    if (end < 1) {
+      return;
+    }
+    // zero the indices
+    for (auto i = 0u; i < indices.size(); ++i) {
+      indices[i] = 0;
+    }
+    iterativeQuickSort<G>(&buffer[0], 0, end);
+  }
+
   void renderTile(const size_t numGaussians, const Bounds2f& tileBounds, unsigned workerId = 0u) {
+
+    sortBuffer<Gaussian2D>(gaus2D, numGaussians);
+
     for (auto i = tileBounds.min.x; i < tileBounds.max.x; ++i) {
       for (auto j = tileBounds.min.y; j < tileBounds.max.y; ++j) {
 
@@ -295,10 +364,7 @@ public:
 
         for (auto gi = 0u; gi < numGaussians; ++gi) {
           Gaussian2D g = unpack<Gaussian2D>(gaus2D, gi * sizeof(Gaussian2D));
-         
-          // if (!g.inside(pixf.x, pixf.y)) {
-          //   continue;
-          // }
+      
           glm::vec4 gCont = {g.colour.x, g.colour.y, g.colour.z, g.colour.w};
           ivec4 con_o = g.ComputeConicOpacity();
           if (con_o.w < 0.1f) {
@@ -358,17 +424,8 @@ public:
     glm::vec2 tanfov(2.0f * atanf(tfb.width / (2.0f * fxy[0])),
                       2.0f * atanf(tfb.height / (2.0f * fxy[0])));
 
-    // Traverse indirect indices of depth-sorted gaussians
-    auto idx = 0u;
-    auto totalGaussians = indices.size();
-    auto offset = tile_id[0] * totalGaussians;
     auto toRender = 0u;
-    for (; ; ++idx) {
-      auto i = (indices[idx] - offset) * sizeof(Gaussian3D);
-      if (i >= buffer.size()) {
-        break;
-      }
-    // for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
+    for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
 
       Gaussian3D g = unpack<Gaussian3D>(buffer, i);
       if (g.gid <= 0) {
@@ -380,7 +437,7 @@ public:
 
       // render and clip, send to the halo region around the current tile
       ivec3 cov2D = g.ComputeCov2D(projmatrix, viewmatrix, tanfov.x, tanfov.y);
-      Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
+      Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D, clipSpace.z);
       auto bb = g2D.GetBoundingBox();
 
       bool withinGuardBand = bb.diagonal().length() < tb.diagonal().length() * 8;
@@ -405,18 +462,13 @@ public:
         }
       }
 
-      if (withinGuardBand && ok) {
+      if (withinGuardBand && ok && g2D.z < 0.0f) {
         auto g2Idx = toRender * sizeof(Gaussian2D);
         insertAt(gaus2D, g2Idx, g2D);
         toRender++;
       }
     }
 
-    // for (auto i = 0u; i < toRender; ++i) {
-    //   auto g2D = unpack<Gaussian2D>(gaus2D, i * sizeof(Gaussian2D));
-    //   auto bb = g2D.GetBoundingBox().clip(tb);
-    //   rasterise(g2D, bb, tb);
-    // }
     if (toRender > 0) {
       renderTile(toRender, tb);
     }
@@ -448,7 +500,8 @@ public:
 
       // project the 3D gaussian into 2D using EWA splatting algorithm
       glm::vec4 glmMean = {g.mean.x, g.mean.y, g.mean.z, g.mean.w};
-      auto projMean = vp.clipSpaceToViewport(mvp * glmMean);
+      auto clipSpace = mvp * glmMean;
+      auto projMean = vp.clipSpaceToViewport(clipSpace);
    
       if (tb.contains(ivec2{projMean.x, projMean.y})) {
         // anchor arrived so we insert and let
@@ -458,7 +511,7 @@ public:
       } 
 
       ivec3 cov2D = g.ComputeCov2D(projmatrix, viewmatrix, tanfov.x, tanfov.y);
-      Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D);
+      Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D, clipSpace.z);
 
       auto dstTile = tfb.pixCoordToTile(g2D.mean.y, g2D.mean.x);
       dstTile = dstTile < 0 ? 0 : dstTile;
@@ -484,11 +537,11 @@ public:
       // we need to render and pass it on until the extent is fully rendered.
       auto bb = g2D.GetBoundingBox();
 
-      if (bb.diagonal().length() < tb.diagonal().length() * 8) {
+      // if (bb.diagonal().length() < tb.diagonal().length() * 8) {
         directions sendTo;
         auto clippedBB = bb.clip(tb, sendTo);
         protocol<Gaussian3D>(g, sendTo, recievedFrom);
-      }
+      // }
       bool overflow = !insert(vertsIn, g);
 
     }
@@ -541,7 +594,7 @@ public:
     readInput(downIn, direction::down, projmatrix, viewmatrix, tfb, vp);
     
 
-      return true;
+    return true;
   }
  
 };
