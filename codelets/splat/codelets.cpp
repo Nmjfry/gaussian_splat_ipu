@@ -341,7 +341,7 @@ public:
 
   template<typename G>
   void sortBuffer(poplar::Vector<float>& buffer, unsigned end, unsigned workerId = 0u) {
-    if (end < 1 || end == indices.size()) {
+    if (end < 1 || end >= indices.size() - 1) {
       return;
     }
     // zero the indices
