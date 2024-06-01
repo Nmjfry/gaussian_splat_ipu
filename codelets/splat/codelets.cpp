@@ -341,7 +341,7 @@ public:
 
   template<typename G>
   void sortBuffer(poplar::Vector<float>& buffer, unsigned end, unsigned workerId = 0u) {
-    if (end < 1) {
+    if (end < 1 || end == indices.size()) {
       return;
     }
     // zero the indices
@@ -440,7 +440,7 @@ public:
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D, clipSpace.z);
       auto bb = g2D.GetBoundingBox();
 
-      bool withinGuardBand = bb.diagonal().length() < tb.diagonal().length() * 8;
+      bool withinGuardBand = bb.diagonal().length() < tb.diagonal().length() * 12;
 
       directions dirs;
       if (withinGuardBand) {
@@ -528,8 +528,8 @@ public:
           // guard against losing a gaussian
           // we get here if the out buffer is full but the 
           // gaussian is in transit to another tile
-          bool overflow = !insert(vertsIn, g);
         }
+        bool overflow = !insert(vertsIn, g);
         continue;
       }
 
