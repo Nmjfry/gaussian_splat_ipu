@@ -176,9 +176,6 @@ public:
     ivec4 pixel;
     unsigned idx = toByteBufferIndex(x, y);
     memcpy(&pixel, &localFb[idx], sizeof(pixel));
-    // if (pixel.w > 0.f) {
-    //   return;
-    // }
     pixel = pixel + colour;
     memcpy(&localFb[idx], &pixel, sizeof(pixel));
   }
@@ -364,6 +361,19 @@ public:
 
         for (auto gi = 0u; gi < numGaussians; ++gi) {
           Gaussian2D g = unpack<Gaussian2D>(gaus2D, gi * sizeof(Gaussian2D));
+
+          // render centre
+          auto mean = glm::vec2(g.mean.x, g.mean.y);
+          auto dm = distance(mean, pixf);
+          if (dm < 2.0f) {
+            colour = {1.0f, 0.f, 0.f, 1.0f};
+            continue;
+          } 
+          // else {
+          //   colour = {1.f / dm * 10.f, 1.f / dm * 10.f, 0.f, 1.0f};
+          //   continue;
+          // }
+
       
           glm::vec4 gCont = {g.colour.x, g.colour.y, g.colour.z, g.colour.w};
           ivec4 con_o = g.ComputeConicOpacity();
@@ -466,6 +476,7 @@ public:
         auto g2Idx = toRender * sizeof(Gaussian2D);
         insertAt(gaus2D, g2Idx, g2D);
         toRender++;
+        // rasterise(g2D, bb, tb);
       }
     }
 
@@ -537,11 +548,11 @@ public:
       // we need to render and pass it on until the extent is fully rendered.
       auto bb = g2D.GetBoundingBox();
 
-      // if (bb.diagonal().length() < tb.diagonal().length() * 8) {
+      if (bb.diagonal().length() < tb.diagonal().length() * 12) {
         directions sendTo;
         auto clippedBB = bb.clip(tb, sendTo);
         protocol<Gaussian3D>(g, sendTo, recievedFrom);
-      // }
+      }
       bool overflow = !insert(vertsIn, g);
 
     }
