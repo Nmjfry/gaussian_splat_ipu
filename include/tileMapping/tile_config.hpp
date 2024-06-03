@@ -113,7 +113,7 @@ public:
     return tid < numTiles;
   }
 
-  directions checkImageBoundaries(unsigned tid) {
+  directions checkImageBoundaries(unsigned tid) const {
     directions dirs;
     auto [tl, br] = getTileBounds(tid);
 

@@ -7,7 +7,10 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include <poputil/TileMapping.hpp>
+
+#include <popops/codelets.hpp>
 #include <popops/TopK.hpp>
+#include <popops/Fill.hpp>
 
 #include <tileMapping/edge_builder.hpp>
 
@@ -16,8 +19,10 @@ using namespace poplar;
 namespace splat {
 
 IpuSplatter::IpuSplatter(const Points& verts, TiledFramebuffer& fb, bool noAMP)
-  : modelViewProjection("mvp"), inputVertices("verts_in"), outputFramebuffer("frame_buffer"), 
-    transformMatrix(16),
+  : modelView("mv"), projection("mp"), fxy("fxy"), inputVertices("verts_in"), outputFramebuffer("frame_buffer"), 
+    hostModelView(16),
+    hostProjection(16),
+    fxyHost(2),
     initialised(false),
     disableAMPVertices(noAMP),
     fbMapping(fb)
@@ -41,8 +46,10 @@ IpuSplatter::IpuSplatter(const Points& verts, TiledFramebuffer& fb, bool noAMP)
 }
 
 IpuSplatter::IpuSplatter(const Gaussians& verts, TiledFramebuffer& fb, bool noAMP)
-  : modelViewProjection("mvp"), inputVertices("verts_in"), outputFramebuffer("frame_buffer"), 
-    transformMatrix(16),
+  : modelView("mv"), projection("mp"), fxy("fxy"), inputVertices("verts_in"), outputFramebuffer("frame_buffer"), 
+    hostModelView(16),
+    hostProjection(16),
+    fxyHost(2),
     initialised(false),
     disableAMPVertices(noAMP),
     fbMapping(fb)
@@ -52,11 +59,6 @@ IpuSplatter::IpuSplatter(const Gaussians& verts, TiledFramebuffer& fb, bool noAM
   printf("num verts in: %lu, elemsize: %lu \n", verts.size(), elemSize);
   
   for (auto j = 0u; j < verts.size(); ++j) {
-    //   ivec4 mean; // in world space
-    // ivec4 colour; // RGBA colour space
-    // ivec4 rot;  // local rotation of gaussian (real, i, j, k)
-    // ivec3 scale;
-    // float gid;
     auto gptr = (const float*)&verts[j];
     for (auto i = 0u; i < elemSize; ++i) {
       hostVertices.push_back(*(gptr + i));
@@ -72,13 +74,27 @@ IpuSplatter::IpuSplatter(const Gaussians& verts, TiledFramebuffer& fb, bool noAM
   printf("Fb size: %luB\n", frameBuffer.size());
 }
 
-void IpuSplatter::updateModelViewProjection(const glm::mat4& mvp) {
-  auto mvpt = glm::transpose(mvp);
-  auto ptr = (const float*)glm::value_ptr(mvpt);
-  for (auto i = 0u; i < transformMatrix.size(); ++i) {
-    transformMatrix[i] = *ptr;
+
+void IpuSplatter::updateModelView(const glm::mat4& mv) {
+  auto mvt = glm::transpose(mv);
+  auto ptr = (const float*)glm::value_ptr(mvt);
+  for (auto i = 0u; i < hostModelView.size(); ++i) {
+    hostModelView[i] = *ptr;
     ptr += 1;
   }
+}
+
+void IpuSplatter::updateProjection(const glm::mat4& mp) {
+  auto mpt = glm::transpose(mp);
+  auto ptr = (const float*)glm::value_ptr(mpt);
+  for (auto i = 0u; i < hostProjection.size(); ++i) {
+    hostProjection[i] = *ptr;
+    ptr += 1;
+  }
+}
+
+void IpuSplatter::updateFocalLengths(float fx, float fy) {
+  fxyHost = {fx, fy};
 }
 
 // takes a cv::Mat image and returns a copy of the original but with the image partitioned into tiles of size tileHeight x tileWidth.
@@ -149,7 +165,7 @@ MappingInfo calculateMapping(poplar::Graph& g, std::size_t numElements, std::siz
   double paddedRemainder = std::ceil(remainingElements / grainSize) * grainSize;
 
   auto totalTiles = fullTiles + unfilledTiles;
-  totalTiles = totalTiles > 1439 ? 1439 : totalTiles;
+  totalTiles = totalTiles > fbMapping.numTiles - 1 ? fbMapping.numTiles - 1 : totalTiles;
 
   ipu_utils::logger()->info("Upper bound elements per tile: {}", elementsPerTile);
   ipu_utils::logger()->info("Full tiles: {}", fullTiles);
@@ -218,7 +234,7 @@ void addProjectionVertexAMP(poplar::Graph& g, poplar::ComputeSet& cs, unsigned t
 }
 
 void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
-  auto vg = graph.createVirtualGraph(0u, 1440u);
+  auto vg = graph.createVirtualGraph(0u, fbMapping.numTiles);
 
   const auto codeletFile = std::string(POPC_PREFIX) + "/codelets/splat/codelets.cpp";
   const auto glmPath = std::string(POPC_PREFIX) + "/external/glm/";
@@ -227,16 +243,25 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   const auto tileMapping = std::string(POPC_PREFIX) + "/include/tileMapping";
   const auto includes = " -I " + glmPath + " -I " + mathPath + " -I " + otherIncludes + " -I " + tileMapping;
   ipu_utils::logger()->debug("POPC_PREFIX: {}", POPC_PREFIX);
+  popops::addCodelets(vg);
   vg.addCodelets(codeletFile, poplar::CodeletFileType::Auto, "-O3" + includes);
 
   // Create storage for the model view projeciton matrix. Place the master copy on tile 0
   // and then broadcast from their to all other tiles before any computations.
-  modelViewProjection.buildTensor(vg, FLOAT, {4, 4});
-  vg.setTileMapping(modelViewProjection, 0u);
+  modelView.buildTensor(vg, FLOAT, {4, 4});
+  vg.setTileMapping(modelView, 0u);
+
+  projection.buildTensor(vg, FLOAT, {4, 4});
+  vg.setTileMapping(projection, 0u);
+
+  fxy.buildTensor(vg, FLOAT, {2});
+  vg.setTileMapping(fxy, 0u);
 
   // Build a program to upload and broadcast the modelling-projection matrix:
   program::Sequence broadcastMvp;
-  broadcastMvp.add(modelViewProjection.buildWrite(vg, true));
+  broadcastMvp.add(modelView.buildWrite(vg, true));
+  broadcastMvp.add(projection.buildWrite(vg, true));
+  broadcastMvp.add(fxy.buildWrite(vg, true));
 
   auto fbGrainSize = 4;
   auto fbToTileMapping = calculateMapping(vg, frameBuffer.size(), fbGrainSize, fbMapping);
@@ -262,121 +287,91 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   const auto csName = disableAMPVertices ? "project" : "project_amp";
   auto splatCs = vg.addComputeSet(csName);
 
+  unsigned numPoints = 130;
+  std::size_t channelSize = numPoints * grainSize;
+  std::size_t extraStorageSize = channelSize * 5;
+
+  // construct z-buffer program to sort the gaussians
+  program::Sequence sortGaussians;
+
+  MappingInfo zBufferMapping = mapping;
+  zBufferMapping.elementsPerTile = (zBufferMapping.elementsPerTile + extraStorageSize) / grainSize;
+  std::size_t totalGaussianCapacity = (hostVertices.size() + mapping.padding + extraStorageSize * zBufferMapping.totalTiles) / grainSize;
+  
+  const auto depths = vg.addVariable(poplar::UNSIGNED_INT, {totalGaussianCapacity}, "depths");
+  const auto indices = vg.addVariable(poplar::INT, {totalGaussianCapacity});
+  applyTileMapping(vg, depths, zBufferMapping);
+  applyTileMapping(vg, indices, zBufferMapping);
+
+
+  std::vector<poplar::VertexRef> vertices;
   // Get the tile mapping and connect the vertices:
   const auto tm = vg.getTileMapping(paddedInput);
   const auto tmFb = vg.getTileMapping(paddedFramebuffer);
-
-  unsigned numPoints = 100;
-  std::size_t channelSize = numPoints * grainSize;
-
-  program::Sequence sortGaussians;
-
-  std::vector<poplar::VertexRef> vertices;
+  const auto tmDepth = vg.getTileMapping(depths);
+  const auto tmIndices = vg.getTileMapping(indices);
 
   for (auto t = 0u; t < tm.size(); ++t) {
     const auto& m = tm[t];
     const auto& mFb = tmFb[t];
+    const auto& mDepth = tmDepth[t];
+    const auto& mIndices = tmIndices[t];
     if (m.size() > 1u) {
       throw std::runtime_error("Expected fb to be stored as a single contiguous region per tile.");
     }
     if (m.size() > 0u) {
       // Add the tile local MVP matrix variable and append a copies that broadcast it to all tiles:
-      auto localMvp = vg.clone(modelViewProjection, "mvp_tile_" + std::to_string(t));
-      vg.setTileMapping(localMvp, t);
-      broadcastMvp.add(program::Copy(modelViewProjection, localMvp));
+      auto localMv = vg.clone(modelView, "mv_tile_" + std::to_string(t));
+      vg.setTileMapping(localMv, t);
+      broadcastMvp.add(program::Copy(modelView, localMv));
+
+      auto localProj = vg.clone(projection, "mp_tile_" + std::to_string(t));
+      vg.setTileMapping(localProj, t);
+      broadcastMvp.add(program::Copy(projection, localProj));
+
+      auto localFxy = vg.clone(fxy, "fxy_tile_" + std::to_string(t));
+      vg.setTileMapping(localFxy, t);
+      broadcastMvp.add(program::Copy(fxy, localFxy));
 
       auto ptsIn = paddedInput.slice(m.front());
-
-      Tensor tid = vg.addConstant<int>(INT, {1}, {int(t)});
-      vg.setTileMapping(tid, t);
-
       auto sliceFb = paddedFramebuffer.slice(mFb.front());
+      auto sliceIdxs = indices.slice(mIndices.front());
 
-      auto storage = vg.addVariable(poplar::FLOAT, {channelSize * 8});
+      auto storage = vg.addVariable(poplar::FLOAT, {extraStorageSize});
       vg.setTileMapping(storage, t);
-
       auto gaussians = concat(ptsIn, storage);
-      // ipu_utils::logger()->info("total gaussian storage: {}", (ptsIn.numElements() + storage.numElements()) / grainSize);
 
-      const auto depths = vg.addVariable(poplar::FLOAT, {(ptsIn.numElements() + storage.numElements()) / grainSize});
-      // const auto indices = vg.addVariable(poplar::HALF, {(ptsIn.numElements() + storage.numElements()) / grainSize});
-      vg.setTileMapping(depths, t);
-      // vg.setTileMapping(indices, t);
-      // const auto tk = popops::TopKParams(indices.numElements(), false, popops::SortOrder::DESCENDING);
-      // std::pair<poplar::Tensor, poplar::Tensor> sortedGs = popops::topKKeyValue(vg, sortGaussians, depths, indices, tk);
+      auto gaus2D = vg.addVariable(poplar::FLOAT, {sliceIdxs.numElements() * sizeof(Gaussian2D)});
+      vg.setTileMapping(gaus2D, t);
+
+      auto tid = vg.addConstant<int>(INT, {1}, {int(t)});
+      vg.setTileMapping(tid, t);
 
       auto v = vg.addVertex(splatCs, "GSplat");
       vg.setTileMapping(v, t);
-      vg.connect(v["matrix"], localMvp.flatten());
+      vg.connect(v["modelView"], localMv.flatten());
+      vg.connect(v["projection"], localProj.flatten());
       vg.connect(v["vertsIn"], gaussians);
+      vg.connect(v["indices"], sliceIdxs);
+      vg.connect(v["gaus2D"], gaus2D);
       vg.connect(v["localFb"], sliceFb);
+      vg.connect(v["fxy"], localFxy);
       vg.connect(v["tile_id"], tid);
-      vg.connect(v["depths"], depths);
       vertices.push_back(v);
     }
   }
 
-  struct edge r2l("rightOut", "leftIn"); // -->
-  struct edge l2r("leftOut", "rightIn"); // <--
-
-  struct edge l2l("leftOut", "leftIn"); // <->
-  struct edge r2r("rightOut", "rightIn"); // >-<
-
-  struct edge u2d("upOut", "downIn");
-  struct edge d2u("downOut", "upIn");
-  
-  struct edge u2u("upOut", "upIn");
-  struct edge d2d("downOut", "downIn");
 
   EdgeBuilder eb(vg, vertices, channelSize);
-
-  for (auto t = 0u; t < vertices.size(); ++t) {
-    const auto& m = tm[t];
-    if (m.size() > 1u) {
-      throw std::runtime_error("Expected fb to be stored as a single contiguous region per tile.");
-    }
-    if (m.size() > 0u) {
-      auto tileOnBoundary = fbMapping.checkImageBoundaries(t);
-
-      if (tileOnBoundary.up) {
-        eb.addEdge(t, t, u2u);
-      }
-
-      if (tileOnBoundary.left) {
-        eb.addEdge(t, t, l2l);
-      }
-
-      if (tileOnBoundary.right) {
-        eb.addEdge(t, t, r2r);
-      }
-
-      if (tileOnBoundary.down) {
-        eb.addEdge(t, t, d2d);
-      }
-
-      if (!tileOnBoundary.right && t + 1 < vertices.size()) {
-        eb.addEdge(t, t + 1, r2l);
-        eb.addEdge(t + 1, t, l2r);
-      } else if (!tileOnBoundary.right) {
-        eb.addEdge(t, t, r2r);
-      }
-
-      if (!tileOnBoundary.down && t + fbMapping.numTilesAcross < vertices.size()) {
-        eb.addEdge(t, t + fbMapping.numTilesAcross, d2u);
-        eb.addEdge(t + fbMapping.numTilesAcross, t, u2d);
-      } else if (!tileOnBoundary.down) {
-        eb.addEdge(t, t, d2d);
-      }
-    }
-  }
-
+  eb.constructLattice(tm, fbMapping);
   // this program sequence will copy the points between all the tiles in the graph
   program::Sequence broadcastPoints = eb.getBroadcastSequence();
 
   program::Sequence main;
-  main.add(broadcastMvp);
-  main.add(broadcastPoints);
-  main.add(program::Execute(splatCs));
+  main.add(broadcastMvp); // sends the model view and projection matrices to all tiles
+  main.add(program::Execute(splatCs)); // splats the gaussians
+  main.add(broadcastPoints); // broadcasts any misplaced gaussians to other tiles
+
   main.add(outputFramebuffer.buildRead(vg, true));
 
   program::Sequence setup;
@@ -389,7 +384,9 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 void IpuSplatter::execute(poplar::Engine& engine, const poplar::Device& device) {
   if (!initialised) {
     initialised = true;
-    modelViewProjection.connectWriteStream(engine, transformMatrix);
+    modelView.connectWriteStream(engine, hostModelView);
+    projection.connectWriteStream(engine, hostProjection);
+    fxy.connectWriteStream(engine, fxyHost);
     inputVertices.connectWriteStream(engine, hostVertices);
     outputFramebuffer.connectReadStream(engine, frameBuffer);
     getPrograms().run(engine, "write_verts");
