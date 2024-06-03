@@ -363,12 +363,12 @@ public:
           Gaussian2D g = unpack<Gaussian2D>(gaus2D, gi * sizeof(Gaussian2D));
 
           // render centre
-          auto mean = glm::vec2(g.mean.x, g.mean.y);
-          auto dm = distance(mean, pixf);
-          if (dm < 2.0f) {
-            colour = {1.0f, 0.f, 0.f, 1.0f};
-            continue;
-          } 
+          // auto mean = glm::vec2(g.mean.x, g.mean.y);
+          // auto dm = distance(mean, pixf);
+          // if (dm < 2.0f) {
+          //   colour = {1.0f, 0.f, 0.f, 1.0f};
+          //   continue;
+          // } 
           // else {
           //   colour = {1.f / dm * 10.f, 1.f / dm * 10.f, 0.f, 1.0f};
           //   continue;
