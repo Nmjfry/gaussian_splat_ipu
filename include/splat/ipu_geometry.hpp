@@ -161,7 +161,7 @@ struct Bounds2f {
   }
 
   bool contains(const ivec2& v) const {
-    return v.x >= min.x && v.x < max.x && v.y >= min.y && v.y < max.y;
+    return ceil(v.x) >= min.x && floor(v.x) < max.x && ceil(v.y) >= min.y && floor(v.y) < max.y;
   }
 
   bool contains(const ivec4& v) const {
