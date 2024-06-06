@@ -438,6 +438,7 @@ public:
     for (auto i = 0; i < buffer.size(); i+=sizeof(Gaussian3D)) {
 
       Gaussian3D g = unpack<Gaussian3D>(buffer, i);
+      auto scale = g.scale;
       if (g.gid <= 0) {
         continue;
       }
@@ -445,17 +446,20 @@ public:
       auto clipSpace = mvp * glm::vec4(g.mean.x, g.mean.y, g.mean.z, g.mean.w);
       auto projMean = vp.clipSpaceToViewport(clipSpace);
 
+      g.scale = g.scale / fxy[1];
       // render and clip, send to the halo region around the current tile
       ivec3 cov2D = g.ComputeCov2D(projmatrix, viewmatrix, tanfov.x, tanfov.y);
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D, clipSpace.z);
       auto bb = g2D.GetBoundingBox();
+      g.scale = scale;
 
-      bool withinGuardBand = bb.diagonal().length() < tb.diagonal().length() * 12;
+      bool withinGuardBand = bb.diagonal().length() < tb.diagonal().length() * 6;
 
       directions dirs;
       if (withinGuardBand) {
         bb = bb.clip(tb, dirs);
       }
+
 
       bool ok = true;
       if (tb.contains(g2D.mean)) {
@@ -502,6 +506,7 @@ public:
     // Iterate over the input channel and unpack the Gaussian3D structs
     for (auto i = 0; i < bufferIn.size(); i+=sizeof(Gaussian3D)) {
       Gaussian3D g = unpack<Gaussian3D>(bufferIn, i);
+      auto scale = g.scale;
       if (g.gid <= 0) {
         // gid 0 if the place in the buffer is not occupied,
         // since the channels are filled from the front we can break
@@ -521,11 +526,14 @@ public:
         continue;
       } 
 
+      g.scale = g.scale / fxy[1];
+
       ivec3 cov2D = g.ComputeCov2D(projmatrix, viewmatrix, tanfov.x, tanfov.y);
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D, clipSpace.z);
+      g.scale = scale;
 
       auto dstTile = tfb.pixCoordToTile(g2D.mean.y, g2D.mean.x);
-      dstTile = dstTile < 0 ? 0 : dstTile;
+      // dstTile = dstTile < 0 ? 0 : dstTile;
       ivec2 dstCentre = tfb.getTileBounds(dstTile).centroid();
       ivec2 prevCentre = tbPrev.centroid();
       ivec2 curCentre = tb.centroid();
@@ -548,7 +556,7 @@ public:
       // we need to render and pass it on until the extent is fully rendered.
       auto bb = g2D.GetBoundingBox();
 
-      if (bb.diagonal().length() < tb.diagonal().length() * 12) {
+      if (bb.diagonal().length() < tb.diagonal().length() * 6) {
         directions sendTo;
         auto clippedBB = bb.clip(tb, sendTo);
         protocol<Gaussian3D>(g, sendTo, recievedFrom);
@@ -597,12 +605,12 @@ public:
     const auto viewmatrix = glm::transpose(glm::make_mat4(&modelView[0]));
     const auto projmatrix = glm::transpose(glm::make_mat4(&projection[0]));
 
-    renderInternal(vertsIn, projmatrix, viewmatrix, tfb, vp);
-
     readInput(rightIn, direction::right, projmatrix, viewmatrix, tfb, vp);
     readInput(leftIn, direction::left, projmatrix, viewmatrix, tfb, vp);
     readInput(upIn, direction::up, projmatrix, viewmatrix, tfb, vp);
     readInput(downIn, direction::down, projmatrix, viewmatrix, tfb, vp);
+
+    renderInternal(vertsIn, projmatrix, viewmatrix, tfb, vp);
     
 
     return true;

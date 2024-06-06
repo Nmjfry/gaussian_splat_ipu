@@ -298,9 +298,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   zBufferMapping.elementsPerTile = (zBufferMapping.elementsPerTile + extraStorageSize) / grainSize;
   std::size_t totalGaussianCapacity = (hostVertices.size() + mapping.padding + extraStorageSize * zBufferMapping.totalTiles) / grainSize;
   
-  const auto depths = vg.addVariable(poplar::UNSIGNED_INT, {totalGaussianCapacity}, "depths");
   const auto indices = vg.addVariable(poplar::INT, {totalGaussianCapacity});
-  applyTileMapping(vg, depths, zBufferMapping);
   applyTileMapping(vg, indices, zBufferMapping);
 
 
@@ -308,13 +306,11 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   // Get the tile mapping and connect the vertices:
   const auto tm = vg.getTileMapping(paddedInput);
   const auto tmFb = vg.getTileMapping(paddedFramebuffer);
-  const auto tmDepth = vg.getTileMapping(depths);
   const auto tmIndices = vg.getTileMapping(indices);
 
   for (auto t = 0u; t < tm.size(); ++t) {
     const auto& m = tm[t];
     const auto& mFb = tmFb[t];
-    const auto& mDepth = tmDepth[t];
     const auto& mIndices = tmIndices[t];
     if (m.size() > 1u) {
       throw std::runtime_error("Expected fb to be stored as a single contiguous region per tile.");

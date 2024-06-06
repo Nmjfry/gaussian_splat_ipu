@@ -172,7 +172,7 @@ int main(int argc, char** argv) {
   }
 
   // Set up the modelling and projection transforms in an OpenGL compatible way:
-  auto modelView = splat::lookAtBoundingBox(bb, glm::vec3(0.f , 1.f, 0.f), 1.f);
+  auto modelView = splat::lookAtBoundingBox(bb, glm::vec3(0.f , 1.f, 1.f), 1.f);
 
   // Transform the BB to camera/eye space:
   splat::Bounds3f bbInCamera(
@@ -223,7 +223,7 @@ int main(int argc, char** argv) {
       pvti::Tracepoint scoped(&traceChannel, "mvp_transform_ipu");
       ipuSplatter->updateModelView(dynamicView);
       ipuSplatter->updateProjection(projection);
-      ipuSplatter->updateFocalLengths(state.X, state.Y);
+      ipuSplatter->updateFocalLengths(state.X, state.lambda1 / 20.f);
       gm.execute(*ipuSplatter);
       ipuSplatter->getFrameBuffer(*imagePtr);
     }
@@ -240,7 +240,8 @@ int main(int argc, char** argv) {
       // Update projection:
       projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
       // Update modelview:
-      dynamicView = modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(0.f, 1.f, 0.f));
+      dynamicView = modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(1.f, 0.f, 0.f));
+      dynamicView = glm::rotate(dynamicView, glm::radians(state.envRotationDegrees2), glm::vec3(0.f, 1.f, 0.f));
       // dynamicView =dynamicView, glm::vec3(0.f, 0.f, -state.Z / 1000.f));
     } else {
       // Only log these if not in interactive mode:
