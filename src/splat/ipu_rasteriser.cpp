@@ -20,6 +20,7 @@ namespace splat {
 
 IpuSplatter::IpuSplatter(const Points& verts, TiledFramebuffer& fb, bool noAMP)
   : modelView("mv"), projection("mp"), fxy("fxy"), inputVertices("verts_in"), outputFramebuffer("frame_buffer"), 
+    counts("splat_counts"),
     hostModelView(16),
     hostProjection(16),
     fxyHost(2),
@@ -47,6 +48,7 @@ IpuSplatter::IpuSplatter(const Points& verts, TiledFramebuffer& fb, bool noAMP)
 
 IpuSplatter::IpuSplatter(const Gaussians& verts, TiledFramebuffer& fb, bool noAMP)
   : modelView("mv"), projection("mp"), fxy("fxy"), inputVertices("verts_in"), outputFramebuffer("frame_buffer"), 
+    counts("splat_counts"),
     hostModelView(16),
     hostProjection(16),
     fxyHost(2),
@@ -71,7 +73,13 @@ IpuSplatter::IpuSplatter(const Gaussians& verts, TiledFramebuffer& fb, bool noAM
       frameBuffer.push_back(0.0);
     }
   }
+
   printf("Fb size: %luB\n", frameBuffer.size());
+
+  splatCounts.resize(fb.numTiles);
+  for (auto& c : splatCounts) {
+    c = 0;
+  }
 }
 
 
@@ -91,6 +99,10 @@ void IpuSplatter::updateProjection(const glm::mat4& mp) {
     hostProjection[i] = *ptr;
     ptr += 1;
   }
+}
+
+void IpuSplatter::getIPUHistogram(std::vector<u_int32_t>& counts) const {
+  counts = splatCounts;
 }
 
 void IpuSplatter::updateFocalLengths(float fx, float fy) {
@@ -196,7 +208,9 @@ void applyTileMapping(poplar::Graph& g, const poplar::Tensor& paddedInput, const
   // Last tile has fewer elements:
   auto lastSlice = paddedInput.slice(sliceStart, paddedInput.numElements());
   ipu_utils::logger()->info("Size of slice on last tile: {}", lastSlice.numElements());
-  g.setTileMapping(lastSlice, t);
+  if (lastSlice.numElements() > 0) {
+    g.setTileMapping(lastSlice, t);
+  }
 }
 
 // Add a vertex to project vertices that uses vanilla C++ code.
@@ -287,9 +301,9 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   const auto csName = disableAMPVertices ? "project" : "project_amp";
   auto splatCs = vg.addComputeSet(csName);
 
-  unsigned numPoints = 130;
+  unsigned numPoints = 10;
   std::size_t channelSize = numPoints * grainSize;
-  std::size_t extraStorageSize = channelSize * 5;
+  std::size_t extraStorageSize = channelSize * 35;
 
   // construct z-buffer program to sort the gaussians
   program::Sequence sortGaussians;
@@ -301,17 +315,24 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   const auto indices = vg.addVariable(poplar::INT, {totalGaussianCapacity});
   applyTileMapping(vg, indices, zBufferMapping);
 
+  const auto splatCounts = vg.addVariable(poplar::UNSIGNED_INT, {(size_t) fbMapping.numTiles});
+  MappingInfo counterInfo = {0, 1, (size_t) fbMapping.numTiles};
+  applyTileMapping(vg, splatCounts, counterInfo);
+  counts = splatCounts.slice(0, fbMapping.numTiles);
+
 
   std::vector<poplar::VertexRef> vertices;
   // Get the tile mapping and connect the vertices:
   const auto tm = vg.getTileMapping(paddedInput);
   const auto tmFb = vg.getTileMapping(paddedFramebuffer);
   const auto tmIndices = vg.getTileMapping(indices);
+  const auto tmCounts = vg.getTileMapping(splatCounts);
 
   for (auto t = 0u; t < tm.size(); ++t) {
     const auto& m = tm[t];
     const auto& mFb = tmFb[t];
     const auto& mIndices = tmIndices[t];
+    const auto& mCounts = tmCounts[t];
     if (m.size() > 1u) {
       throw std::runtime_error("Expected fb to be stored as a single contiguous region per tile.");
     }
@@ -332,6 +353,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       auto ptsIn = paddedInput.slice(m.front());
       auto sliceFb = paddedFramebuffer.slice(mFb.front());
       auto sliceIdxs = indices.slice(mIndices.front());
+      auto counter = splatCounts.slice(mCounts.front());
 
       auto storage = vg.addVariable(poplar::FLOAT, {extraStorageSize});
       vg.setTileMapping(storage, t);
@@ -343,6 +365,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       auto tid = vg.addConstant<int>(INT, {1}, {int(t)});
       vg.setTileMapping(tid, t);
 
+
       auto v = vg.addVertex(splatCs, "GSplat");
       vg.setTileMapping(v, t);
       vg.connect(v["modelView"], localMv.flatten());
@@ -353,6 +376,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       vg.connect(v["localFb"], sliceFb);
       vg.connect(v["fxy"], localFxy);
       vg.connect(v["tile_id"], tid);
+      vg.connect(v["splatted"], counter);  
       vertices.push_back(v);
     }
   }
@@ -369,6 +393,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   main.add(broadcastPoints); // broadcasts any misplaced gaussians to other tiles
 
   main.add(outputFramebuffer.buildRead(vg, true));
+  main.add(counts.buildRead(vg, true));
 
   program::Sequence setup;
   setup.add(inputVertices.buildWrite(vg, true));
@@ -385,6 +410,7 @@ void IpuSplatter::execute(poplar::Engine& engine, const poplar::Device& device) 
     fxy.connectWriteStream(engine, fxyHost);
     inputVertices.connectWriteStream(engine, hostVertices);
     outputFramebuffer.connectReadStream(engine, frameBuffer);
+    counts.connectReadStream(engine, splatCounts);
     getPrograms().run(engine, "write_verts");
   }
   getPrograms().run(engine, "project");

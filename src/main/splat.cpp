@@ -200,9 +200,16 @@ int main(int argc, char** argv) {
       uiServer->sendHistogram(pointCounts);
       uiServer->sendPreviewImage(*imagePtrBuffered);
     }
-    {
-      pvti::Tracepoint scope(&traceChannel, "build_histogram");
-      splat::buildTileHistogram(pointCounts, clipSpace, cpufb, vp);
+    if (state.device == "cpu") {
+      {
+        pvti::Tracepoint scope(&traceChannel, "build_histogram");
+        splat::buildTileHistogram(pointCounts, clipSpace, cpufb, vp);
+      }
+    } else {
+      {
+        pvti::Tracepoint scope(&traceChannel, "build_histogram");
+        ipuSplatter->getIPUHistogram(pointCounts);
+      }
     }
   };
 
@@ -223,6 +230,7 @@ int main(int argc, char** argv) {
       pvti::Tracepoint scoped(&traceChannel, "mvp_transform_ipu");
       ipuSplatter->updateModelView(dynamicView);
       ipuSplatter->updateProjection(projection);
+ 
       ipuSplatter->updateFocalLengths(state.X, state.lambda1 / 20.f);
       gm.execute(*ipuSplatter);
       ipuSplatter->getFrameBuffer(*imagePtr);

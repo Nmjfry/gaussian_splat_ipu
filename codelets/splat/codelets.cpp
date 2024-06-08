@@ -148,6 +148,7 @@ public:
 
   poplar::Input<poplar::Vector<int>> tile_id;
   poplar::Input<poplar::Vector<float>> fxy;
+  poplar::Output<poplar::Vector<unsigned>> splatted;
   
   poplar::InOut<poplar::Vector<float>> vertsIn;
   poplar::Output<poplar::Vector<int>> indices;
@@ -453,7 +454,7 @@ public:
       auto bb = g2D.GetBoundingBox();
       g.scale = scale;
 
-      bool withinGuardBand = bb.diagonal().length() < tb.diagonal().length() * 6;
+      bool withinGuardBand = true; //bb.diagonal().length() < tb.diagonal().length() * 6;
 
       directions dirs;
       if (withinGuardBand) {
@@ -486,6 +487,7 @@ public:
 
     if (toRender > 0) {
       renderTile(toRender, tb);
+      splatted[0] = toRender;
     }
   }
 
@@ -556,11 +558,11 @@ public:
       // we need to render and pass it on until the extent is fully rendered.
       auto bb = g2D.GetBoundingBox();
 
-      if (bb.diagonal().length() < tb.diagonal().length() * 6) {
+      // if (bb.diagonal().length() < tb.diagonal().length() * 6) {
         directions sendTo;
         auto clippedBB = bb.clip(tb, sendTo);
         protocol<Gaussian3D>(g, sendTo, recievedFrom);
-      }
+      // }
       bool overflow = !insert(vertsIn, g);
 
     }
