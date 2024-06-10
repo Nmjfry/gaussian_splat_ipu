@@ -143,7 +143,8 @@ int main(int argc, char** argv) {
       colour += 0.5f;
       colour = glm::max(colour, glm::vec3(0.f));
       g.colour = {colour.x, colour.y, colour.z, ply.opacity.values[i]};
-      g.scale = {-ply.scale[0].values[i], -ply.scale[1].values[i], -ply.scale[2].values[i]};
+      // g.scale = {ply.scale[0].values[i], ply.scale[1].values[i], ply.scale[2].values[i]};
+      g.scale = {3.f, 3.f, 3.f};
       g.rot = {ply.rot[0].values[i], ply.rot[1].values[i], ply.rot[2].values[i], ply.rot[3].values[i]};
     } else {
       g.colour = {0.05f, 0.05f, 0.05f, 1.0f};
@@ -213,7 +214,24 @@ int main(int argc, char** argv) {
     }
   };
 
-  auto dynamicView = modelView;
+  auto secondsElapsed = 0.0;
+
+  //mvp start
+  // [[-1.0, 0.0, 0.0, 0.0],
+  // [0.0,-0.09709989, -0.99527466, 0.0],
+  // [0.0, -0.99527466, 0.09709989, 0.0],
+  // [0.0, 0.0, -5.1539507, 1.0]]
+
+  auto mvpStart  = glm::mat4(1.0f);
+  mvpStart[0][0] = -1.0f;
+  mvpStart[1][1] = -0.09709989f;
+  mvpStart[1][2] = -0.99527466f;
+  mvpStart[2][1] = -0.99527466f;
+  mvpStart[2][2] = 0.09709989f;
+  mvpStart[3][2] = -5.1539507f;
+
+
+  auto dynamicView = mvpStart;
   do {
     auto startTime = std::chrono::steady_clock::now();
     *imagePtr = 0;
@@ -231,13 +249,23 @@ int main(int argc, char** argv) {
       ipuSplatter->updateModelView(dynamicView);
       ipuSplatter->updateProjection(projection);
  
-      ipuSplatter->updateFocalLengths(state.X, state.lambda1 / 20.f);
+      ipuSplatter->updateFocalLengths(state.X, state.lambda1 / 10.f);
       gm.execute(*ipuSplatter);
       ipuSplatter->getFrameBuffer(*imagePtr);
     }
 
     auto endTime = std::chrono::steady_clock::now();
     auto splatTimeSecs = std::chrono::duration<double>(endTime - startTime).count();
+
+    secondsElapsed += splatTimeSecs;
+    if (secondsElapsed > 3.f) {
+      ipu_utils::logger()->info("Splat time: {} points/sec: {}", splatTimeSecs, pts.size()/splatTimeSecs);
+      // print dynamic view matrix:
+
+      // for (int i = 0; i < 4; i++) {
+      //   ipu_utils::logger()->info("Dynamic view matrix: {} {} {} {}", dynamicView[i][0], dynamicView[i][1], dynamicView[i][2], dynamicView[i][3]);
+      // }
+    }
 
     if (uiServer) {
       hostProcessing.waitForCompletion();
@@ -248,8 +276,24 @@ int main(int argc, char** argv) {
       // Update projection:
       projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
       // Update modelview:
+      if (secondsElapsed >= 3.f) {
+        printf("envRotationDegrees: %f\n", state.envRotationDegrees);
+        printf("envRotationDegrees2: %f\n", state.envRotationDegrees2);
+        printf("fov: %f\n", state.fov);
+        secondsElapsed = 0.0;
+
+      }
+
+//       envRotationDegrees: 96.654427
+// envRotationDegrees2: 2.726311
+// fov: 0.352075
+
+// envRotationDegrees: 85.763603
+// envRotationDegrees2: 184.763657
+// fov: 0.433323
+
       dynamicView = modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(1.f, 0.f, 0.f));
-      dynamicView = glm::rotate(dynamicView, glm::radians(state.envRotationDegrees2), glm::vec3(0.f, 1.f, 0.f));
+      dynamicView = glm::rotate(dynamicView, glm::radians(state.envRotationDegrees2), glm::vec3(0.f, 0.f, 1.f));
       // dynamicView =dynamicView, glm::vec3(0.f, 0.f, -state.Z / 1000.f));
     } else {
       // Only log these if not in interactive mode:
