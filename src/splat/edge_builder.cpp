@@ -13,13 +13,15 @@ void EdgeBuilder::addBidirectionalEdge(unsigned tid1, unsigned tid2, struct edge
 }
 
 void EdgeBuilder::addEdge(unsigned tid1, unsigned tid2, struct edge edge) {
-    poplar::Tensor outT1 = graph.addVariable(poplar::FLOAT, {channelSize});
-    poplar::Tensor inT2 = graph.addVariable(poplar::FLOAT, {channelSize});
+    auto [src, dst] = edge;
+    // printf("channelSize: %lu\n", channelSize);
+    auto numFloats = channelSize / 4;
+    poplar::Tensor outT1 = graph.addVariable(poplar::FLOAT, {numFloats}, src);
+    poplar::Tensor inT2 = graph.addVariable(poplar::FLOAT, {numFloats}, dst);
 
     graph.setTileMapping(outT1, tid1);
     graph.setTileMapping(inT2, tid2);
 
-    auto [src, dst] = edge;
 
     auto v1 = vertexRefs[tid1];
     graph.connect(v1[src], outT1);

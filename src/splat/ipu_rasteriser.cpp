@@ -301,9 +301,9 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   const auto csName = disableAMPVertices ? "project" : "project_amp";
   auto splatCs = vg.addComputeSet(csName);
 
-  unsigned numPoints = 10;
+  unsigned numPoints = 40;
   std::size_t channelSize = numPoints * grainSize;
-  std::size_t extraStorageSize = channelSize * 35;
+  std::size_t extraStorageSize = channelSize * 25;
 
   // construct z-buffer program to sort the gaussians
   program::Sequence sortGaussians;
@@ -312,7 +312,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   zBufferMapping.elementsPerTile = (zBufferMapping.elementsPerTile + extraStorageSize) / grainSize;
   std::size_t totalGaussianCapacity = (hostVertices.size() + mapping.padding + extraStorageSize * zBufferMapping.totalTiles) / grainSize;
   
-  const auto indices = vg.addVariable(poplar::INT, {totalGaussianCapacity});
+  const auto indices = vg.addVariable(poplar::INT, {totalGaussianCapacity}, "indices");
   applyTileMapping(vg, indices, zBufferMapping);
 
   const auto splatCounts = vg.addVariable(poplar::UNSIGNED_INT, {(size_t) fbMapping.numTiles});
@@ -355,11 +355,11 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
       auto sliceIdxs = indices.slice(mIndices.front());
       auto counter = splatCounts.slice(mCounts.front());
 
-      auto storage = vg.addVariable(poplar::FLOAT, {extraStorageSize});
+      auto storage = vg.addVariable(poplar::FLOAT, {extraStorageSize}, "extra_storage");
       vg.setTileMapping(storage, t);
       auto gaussians = concat(ptsIn, storage);
 
-      auto gaus2D = vg.addVariable(poplar::FLOAT, {sliceIdxs.numElements() * sizeof(Gaussian2D)});
+      auto gaus2D = vg.addVariable(poplar::FLOAT, {sliceIdxs.numElements() * sizeof(Gaussian2D)}, "z_buffer");
       vg.setTileMapping(gaus2D, t);
 
       auto tid = vg.addConstant<int>(INT, {1}, {int(t)});
