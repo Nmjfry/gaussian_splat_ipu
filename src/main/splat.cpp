@@ -85,6 +85,7 @@ int main(int argc, char** argv) {
   auto xyzFile = args["input"].as<std::string>();
   auto pts = splat::loadPoints(xyzFile, ply);
   splat::Bounds3f bb(pts);
+
   ipu_utils::logger()->info("Total point count: {}", pts.size());
   ipu_utils::logger()->info("Point bounds (world space): {}", bb);
 
@@ -98,6 +99,8 @@ int main(int argc, char** argv) {
     bb = splat::Bounds3f(pts);
   }
 
+  // bb.max = {1.f, 1.f, 1.f};
+  // bb.min = {-1.f, -1.f, -1.f};
   // Splat all the points into an OpenCV image:
   auto imagePtr = std::make_unique<cv::Mat>(720, 1280, CV_8UC3);
   auto imagePtrBuffered = std::make_unique<cv::Mat>(imagePtr->rows, imagePtr->cols, CV_8UC3);
@@ -144,8 +147,13 @@ int main(int argc, char** argv) {
       colour = glm::max(colour, glm::vec3(0.f));
       g.colour = {colour.x, colour.y, colour.z, ply.opacity.values[i]};
       // g.scale = {ply.scale[0].values[i], ply.scale[1].values[i], ply.scale[2].values[i]};
-      g.scale = {3.f, 3.f, 3.f};
-      g.rot = {ply.rot[0].values[i], ply.rot[1].values[i], ply.rot[2].values[i], ply.rot[3].values[i]};
+      g.scale = {-5.f, -5.f, -5.f};
+      // g.rot = {ply.rot[0].values[i], ply.rot[1].values[i], ply.rot[2].values[i], ply.rot[3].values[i]};
+
+      // printf("scale: %f %f %f\n", g.scale.x, g.scale.y, g.scale.z);
+      // printf("rot: %f %f %f %f\n", g.rot.x, g.rot.y, g.rot.z, g.rot.w);
+      // printf("colour: %f %f %f %f\n", g.colour.x, g.colour.y, g.colour.z, g.colour.w);
+      // printf("mean: %f %f %f %f\n", g.mean.x, g.mean.y, g.mean.z, g.mean.w);
     } else {
       g.colour = {0.05f, 0.05f, 0.05f, 1.0f};
       g.scale = {1.f, 1.f, 1.f};
@@ -249,7 +257,7 @@ int main(int argc, char** argv) {
       ipuSplatter->updateModelView(dynamicView);
       ipuSplatter->updateProjection(projection);
  
-      ipuSplatter->updateFocalLengths(state.X, state.lambda1 / 10.f);
+      ipuSplatter->updateFocalLengths(state.fov, state.lambda1 / 10.f);
       gm.execute(*ipuSplatter);
       ipuSplatter->getFrameBuffer(*imagePtr);
     }
@@ -277,6 +285,12 @@ int main(int argc, char** argv) {
       projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
       // Update modelview:
       if (secondsElapsed >= 3.f) {
+        // print viewmatrix
+        for (int i = 0; i < 4; i++) {
+          ipu_utils::logger()->info("Dynamic view matrix: {} {} {} {}", modelView[i][0], modelView[i][1], modelView[i][2], modelView[i][3]);
+        }
+
+
         printf("envRotationDegrees: %f\n", state.envRotationDegrees);
         printf("envRotationDegrees2: %f\n", state.envRotationDegrees2);
         printf("fov: %f\n", state.fov);
@@ -292,8 +306,8 @@ int main(int argc, char** argv) {
 // envRotationDegrees2: 184.763657
 // fov: 0.433323
 
-      dynamicView = modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(1.f, 0.f, 0.f));
-      dynamicView = glm::rotate(dynamicView, glm::radians(state.envRotationDegrees2), glm::vec3(0.f, 0.f, 1.f));
+      dynamicView = modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(0.f, 1.f, 0.f));
+      // dynamicView = glm::rotate(dynamicView, glm::radians(state.envRotationDegrees2), glm::vec3(0.f, 1.f, 0.f));
       // dynamicView =dynamicView, glm::vec3(0.f, 0.f, -state.Z / 1000.f));
     } else {
       // Only log these if not in interactive mode:
