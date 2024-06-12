@@ -262,13 +262,15 @@ struct Gaussian2D {
 
   Bounds2f GetBoundingBox() const {
     auto [e1, e2, theta] = ComputeEigenvalues();
-    float c, s;
-    sincos(theta, s, c);
-    auto dd = (e1 / 2) * (e1 / 2);
-    auto DD = (e2 / 2) * (e2 / 2);
-    auto dxMax = glm::sqrt(dd * (c * c) + DD * (s * s));
-    auto dyMax = glm::sqrt(dd * (s * s) + DD * (c * c));
-    return Bounds2f({mean.x - dxMax, mean.y - dyMax}, {mean.x + dxMax, mean.y + dyMax});
+    // float c, s;
+    // sincos(theta, s, c);
+    // auto dd = (e1 / 2) * (e1 / 2);
+    // auto DD = (e2 / 2) * (e2 / 2);
+    // auto dxMax = glm::sqrt(dd * (c * c) + DD * (s * s));
+    // auto dyMax = glm::sqrt(dd * (s * s) + DD * (c * c));
+
+    float my_radius = ceil(3.f * sqrt(max(e1, e2)));
+    return Bounds2f({mean.x - my_radius, mean.y - my_radius}, {mean.x + my_radius, mean.y + my_radius});
   }
 
   ivec4 ComputeConicOpacity() const {
@@ -315,7 +317,7 @@ class Gaussian3D {
         glm::mat3 S(glm::vec3(expf(scale.x), 0.0f, 0.0f),
                     glm::vec3(0.0f, expf(scale.y), 0.0f),
                     glm::vec3(0.0f, 0.0f, expf(scale.z)));
-        return R * S * glm::transpose(S) * glm::transpose(R);
+        return glm::transpose(R) * glm::transpose(S) * S * R;
     }
 
     static float max(float a, float b) {
@@ -326,9 +328,11 @@ class Gaussian3D {
       return a < b ? a : b;
     }
 
-    ivec3 ComputeCov2D(const glm::mat4& projmatrix, const glm::mat4& viewmatrix, float tan_fovx, float tan_fovy) {
+    ivec3 ComputeCov2D(const glm::mat4& projmatrix, const glm::mat4& viewmatrix, float tan_fovx, float tan_fovy, float focal_x, float focal_y) {
       // const auto mvp = projmatrix * viewmatrix;
-      glm::vec3 t = glm::vec3(viewmatrix * glm::vec4(mean.x, mean.y, mean.z, 1.f));
+
+      const glm::mat4 mv = glm::transpose(projmatrix * viewmatrix);
+      glm::vec3 t = glm::vec3(glm::mat3(mv) * glm::vec3(mean.x, mean.y, mean.z));
       const float limx = 1.3f * tan_fovx;
       const float limy = 1.3f * tan_fovy;
       const float txtz = t.x / t.z;
@@ -336,15 +340,29 @@ class Gaussian3D {
       t.x = min(limx, max(-limx, txtz)) * t.z;
       t.y = min(limy, max(-limy, tytz)) * t.z;
 
-      const float focal_x = 1.0f;
-      const float focal_y = 1.0f;
-
       glm::mat3 J = glm::mat3(
         focal_x / t.z, 0.0f, -(focal_x * t.x) / (t.z * t.z),
         0.0f, focal_y / t.z, -(focal_y * t.y) / (t.z * t.z),
         0, 0, 0);
 
-      glm::mat3 W = glm::mat3(viewmatrix);
+      glm::mat3 W = glm::mat3(mv);
+      // for (int row = 0; row < 4; ++row) {
+      //   for (int col = 0; col < 4; ++col) {
+      //       printf("%f ", mv[row][col]);
+      //   }
+      // }
+      //   printf("\n");
+
+        // -1.000000 0.0      0.0       0.0 
+        //  0.0      0.999999 0.0       0.0
+        //  0.0      0.0     -0.999999  0.0
+        //  0.0      0.0     -1.636055  1.000000
+
+        //  -1.000000 0.0 0.0   0.0
+        //  0.0 0.999999 0.0    0.0 
+        //  0.0 0.0 -0.999999   -1.636055
+        //  0.0 0.0 0.0         1.000000 
+
 
       glm::mat3 T = W * J;
 
@@ -356,6 +374,8 @@ class Gaussian3D {
       // one pixel wide/high. Discard 3rd row and column.
       cov[0][0] += 0.3f;
       cov[1][1] += 0.3f;
+
+      // printf("cov %f, %f, %f\n", float(cov[0][0]), float(cov[0][1]), float(cov[1][1]));
 
       return { float(cov[0][0]), float(cov[0][1]), float(cov[1][1]) };
     }
