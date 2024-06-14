@@ -146,9 +146,9 @@ int main(int argc, char** argv) {
       colour += 0.5f;
       colour = glm::max(colour, glm::vec3(0.f));
       g.colour = {colour.x, colour.y, colour.z, ply.opacity.values[i]};
-      // g.scale = {ply.scale[0].values[i], ply.scale[1].values[i], ply.scale[2].values[i]};
-      g.scale = {-5.f, -5.f, -5.f};
-      // g.rot = {ply.rot[0].values[i], ply.rot[1].values[i], ply.rot[2].values[i], ply.rot[3].values[i]};
+      g.scale = {ply.scale[0].values[i], ply.scale[1].values[i], ply.scale[2].values[i]};
+      // g.scale = {-5.f, -5.f, -5.f};
+      g.rot = {ply.rot[0].values[i], ply.rot[1].values[i], ply.rot[2].values[i], ply.rot[3].values[i]};
 
       // printf("scale: %f %f %f\n", g.scale.x, g.scale.y, g.scale.z);
       // printf("rot: %f %f %f %f\n", g.rot.x, g.rot.y, g.rot.z, g.rot.w);
@@ -166,6 +166,8 @@ int main(int argc, char** argv) {
   auto ipuSplatter = createIpuBuilder(gsns, fb, args["no-amp"].as<bool>());
   ipu_utils::GraphManager gm;
   gm.compileOrLoad(*ipuSplatter);
+
+  auto FOV = 60.f * M_PI / 180.f;
 
   // Setup a user interface server if requested:
   std::unique_ptr<InterfaceServer> uiServer;
@@ -257,7 +259,7 @@ int main(int argc, char** argv) {
       ipuSplatter->updateModelView(dynamicView);
       ipuSplatter->updateProjection(projection);
  
-      ipuSplatter->updateFocalLengths(state.fov, state.lambda1 / 10.f);
+      ipuSplatter->updateFocalLengths(state.fov, state.lambda1 / 100.f);
       gm.execute(*ipuSplatter);
       ipuSplatter->getFrameBuffer(*imagePtr);
     }
@@ -306,9 +308,10 @@ int main(int argc, char** argv) {
 // envRotationDegrees2: 184.763657
 // fov: 0.433323
 
-      dynamicView = modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(0.f, 1.f, 0.f));
-      // dynamicView = glm::rotate(dynamicView, glm::radians(state.envRotationDegrees2), glm::vec3(0.f, 1.f, 0.f));
-      // dynamicView =dynamicView, glm::vec3(0.f, 0.f, -state.Z / 1000.f));
+      dynamicView = modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(1.f, 0.f, 0.f));
+      dynamicView = glm::rotate(dynamicView, glm::radians(state.envRotationDegrees2), glm::vec3(0.f, 0.f, 1.f));
+      dynamicView = glm::translate(dynamicView, glm::vec3(state.X / 100.f,  state.Y / 100.f, -state.Z / 100.f));
+
     } else {
       // Only log these if not in interactive mode:
       ipu_utils::logger()->info("Splat time: {} points/sec: {}", splatTimeSecs, pts.size()/splatTimeSecs);

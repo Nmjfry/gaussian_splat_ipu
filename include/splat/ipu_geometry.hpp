@@ -317,7 +317,7 @@ class Gaussian3D {
         glm::mat3 S(glm::vec3(expf(scale.x), 0.0f, 0.0f),
                     glm::vec3(0.0f, expf(scale.y), 0.0f),
                     glm::vec3(0.0f, 0.0f, expf(scale.z)));
-        return glm::transpose(R) * glm::transpose(S) * S * R;
+        return R * S * glm::transpose(S) * glm::transpose(R);
     }
 
     static float max(float a, float b) {

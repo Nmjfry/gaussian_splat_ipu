@@ -465,7 +465,7 @@ public:
       auto bb = g2D.GetBoundingBox();
       g.scale = scale;
 
-      bool withinGuardBand = bb.diagonal().length() < tb.diagonal().length() * 20;
+      bool withinGuardBand = bb.diagonal().length() < tb.diagonal().length() * 6;
 
       directions dirs;
       if (withinGuardBand) {
@@ -573,7 +573,7 @@ public:
       // we need to render and pass it on until the extent is fully rendered.
       auto bb = g2D.GetBoundingBox();
 
-      if (bb.diagonal().length() < tb.diagonal().length() * 20) {
+      if (bb.diagonal().length() < tb.diagonal().length() * 6) {
         directions sendTo;
         auto clippedBB = bb.clip(tb, sendTo);
         protocol<Gaussian3D>(g, sendTo, recievedFrom);

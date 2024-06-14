@@ -301,9 +301,12 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   const auto csName = disableAMPVertices ? "project" : "project_amp";
   auto splatCs = vg.addComputeSet(csName);
 
-  unsigned numPoints = 40;
+// for TUM desk:
+// 450
+// chan * 2
+  unsigned numPoints = 400;
   std::size_t channelSize = numPoints * grainSize;
-  std::size_t extraStorageSize = channelSize * 25;
+  std::size_t extraStorageSize = channelSize * 2;
 
   // construct z-buffer program to sort the gaussians
   program::Sequence sortGaussians;
