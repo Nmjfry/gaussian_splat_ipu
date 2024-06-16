@@ -168,6 +168,8 @@ public:
   poplar::Input<poplar::Vector<float>> downIn;
   poplar::Output<poplar::Vector<float>> downOut;
 
+  float clipSize;
+
 
   unsigned toByteBufferIndex(float x, float y) {
     return unsigned(x + y * IPU_TILEWIDTH) * 4;
@@ -458,14 +460,14 @@ public:
       auto clipSpace = mvp * glm::vec4(g.mean.x, g.mean.y, g.mean.z, g.mean.w);
       auto projMean = vp.clipSpaceToViewport(clipSpace);
 
-      g.scale = g.scale / fxy[1];
+      // g.scale = g.scale / fxy[1];
       // render and clip, send to the halo region around the current tile
       ivec3 cov2D = g.ComputeCov2D(projmatrix, viewmatrix, tanfov.x, tanfov.y, focal.x, focal.y);
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D, clipSpace.z);
       auto bb = g2D.GetBoundingBox();
       g.scale = scale;
 
-      bool withinGuardBand = bb.diagonal().length() < tb.diagonal().length() * 6;
+      bool withinGuardBand = bb.diagonal().length() < tb.diagonal().length() * clipSize;
 
       directions dirs;
       if (withinGuardBand) {
@@ -543,7 +545,7 @@ public:
         continue;
       } 
 
-      g.scale = g.scale / fxy[1];
+      // g.scale = g.scale / fxy[1];
 
       ivec3 cov2D = g.ComputeCov2D(projmatrix, viewmatrix, tanfov.x, tanfov.y, focal.x, focal.y);
       Gaussian2D g2D({projMean.x, projMean.y}, g.colour, cov2D, clipSpace.z);
@@ -573,7 +575,7 @@ public:
       // we need to render and pass it on until the extent is fully rendered.
       auto bb = g2D.GetBoundingBox();
 
-      if (bb.diagonal().length() < tb.diagonal().length() * 6) {
+      if (bb.diagonal().length() < tb.diagonal().length() * clipSize) {
         directions sendTo;
         auto clippedBB = bb.clip(tb, sendTo);
         protocol<Gaussian3D>(g, sendTo, recievedFrom);
@@ -617,6 +619,7 @@ public:
     // construct mapping from tile to framebuffer
     const TiledFramebuffer tfb(IPU_TILEWIDTH, IPU_TILEHEIGHT);
     const splat::Viewport vp(0.0f, 0.0f, IMWIDTH, IMHEIGHT);
+    clipSize =  8.0f;
 
     // Transpose because GLM storage order is column major:
     const auto viewmatrix = glm::transpose(glm::make_mat4(&modelView[0]));

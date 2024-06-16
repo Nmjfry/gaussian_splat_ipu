@@ -262,14 +262,16 @@ struct Gaussian2D {
 
   Bounds2f GetBoundingBox() const {
     auto [e1, e2, theta] = ComputeEigenvalues();
-    // float c, s;
-    // sincos(theta, s, c);
-    // auto dd = (e1 / 2) * (e1 / 2);
-    // auto DD = (e2 / 2) * (e2 / 2);
-    // auto dxMax = glm::sqrt(dd * (c * c) + DD * (s * s));
-    // auto dyMax = glm::sqrt(dd * (s * s) + DD * (c * c));
+    float c, s;
+    sincos(theta, s, c);
+    auto dd = (e1 / 2) * (e1 / 2);
+    auto DD = (e2 / 2) * (e2 / 2);
+    auto dxMax = glm::sqrt(dd * (c * c) + DD * (s * s));
+    auto dyMax = glm::sqrt(dd * (s * s) + DD * (c * c));
 
     float my_radius = ceil(3.f * sqrt(max(e1, e2)));
+    // return Bounds2f({mean.x - dxMax, mean.y - dyMax}, {mean.x + dxMax, mean.y + dyMax});
+
     return Bounds2f({mean.x - my_radius, mean.y - my_radius}, {mean.x + my_radius, mean.y + my_radius});
   }
 
@@ -331,8 +333,8 @@ class Gaussian3D {
     ivec3 ComputeCov2D(const glm::mat4& projmatrix, const glm::mat4& viewmatrix, float tan_fovx, float tan_fovy, float focal_x, float focal_y) {
       // const auto mvp = projmatrix * viewmatrix;
 
-      const glm::mat4 mv = glm::transpose(projmatrix * viewmatrix);
-      glm::vec3 t = glm::vec3(glm::mat3(mv) * glm::vec3(mean.x, mean.y, mean.z));
+      const glm::mat4 mv = projmatrix * viewmatrix;
+      glm::vec3 t = glm::vec3(mv * glm::vec4(mean.x, mean.y, mean.z, 1.0f));
       const float limx = 1.3f * tan_fovx;
       const float limy = 1.3f * tan_fovy;
       const float txtz = t.x / t.z;

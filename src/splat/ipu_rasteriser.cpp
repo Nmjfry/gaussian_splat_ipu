@@ -304,7 +304,7 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 // for TUM desk:
 // 450
 // chan * 2
-  unsigned numPoints = 400;
+  unsigned numPoints = 300;
   std::size_t channelSize = numPoints * grainSize;
   std::size_t extraStorageSize = channelSize * 2;
 
