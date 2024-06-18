@@ -85,6 +85,7 @@ int main(int argc, char** argv) {
   auto xyzFile = args["input"].as<std::string>();
   auto pts = splat::loadPoints(xyzFile, ply);
   splat::Bounds3f bb(pts);
+
   ipu_utils::logger()->info("Total point count: {}", pts.size());
   ipu_utils::logger()->info("Point bounds (world space): {}", bb);
 
@@ -98,6 +99,8 @@ int main(int argc, char** argv) {
     bb = splat::Bounds3f(pts);
   }
 
+  // bb.max = {1.f, 1.f, 1.f};
+  // bb.min = {-1.f, -1.f, -1.f};
   // Splat all the points into an OpenCV image:
   auto imagePtr = std::make_unique<cv::Mat>(720, 1280, CV_8UC3);
   auto imagePtrBuffered = std::make_unique<cv::Mat>(imagePtr->rows, imagePtr->cols, CV_8UC3);
@@ -143,8 +146,14 @@ int main(int argc, char** argv) {
       colour += 0.5f;
       colour = glm::max(colour, glm::vec3(0.f));
       g.colour = {colour.x, colour.y, colour.z, ply.opacity.values[i]};
-      g.scale = {-ply.scale[0].values[i], -ply.scale[1].values[i], -ply.scale[2].values[i]};
+      g.scale = {ply.scale[0].values[i], ply.scale[1].values[i], ply.scale[2].values[i]};
+      // g.scale = {-5.f, -5.f, -5.f};
       g.rot = {ply.rot[0].values[i], ply.rot[1].values[i], ply.rot[2].values[i], ply.rot[3].values[i]};
+
+      // printf("scale: %f %f %f\n", g.scale.x, g.scale.y, g.scale.z);
+      // printf("rot: %f %f %f %f\n", g.rot.x, g.rot.y, g.rot.z, g.rot.w);
+      // printf("colour: %f %f %f %f\n", g.colour.x, g.colour.y, g.colour.z, g.colour.w);
+      // printf("mean: %f %f %f %f\n", g.mean.x, g.mean.y, g.mean.z, g.mean.w);
     } else {
       g.colour = {0.05f, 0.05f, 0.05f, 1.0f};
       g.scale = {1.f, 1.f, 1.f};
@@ -157,6 +166,8 @@ int main(int argc, char** argv) {
   auto ipuSplatter = createIpuBuilder(gsns, fb, args["no-amp"].as<bool>());
   ipu_utils::GraphManager gm;
   gm.compileOrLoad(*ipuSplatter);
+
+  auto FOV = glm::radians(40.f);
 
   // Setup a user interface server if requested:
   std::unique_ptr<InterfaceServer> uiServer;
@@ -172,7 +183,7 @@ int main(int argc, char** argv) {
   }
 
   // Set up the modelling and projection transforms in an OpenGL compatible way:
-  auto modelView = splat::lookAtBoundingBox(bb, glm::vec3(0.f , 1.f, 0.f), 1.f);
+  auto modelView = splat::lookAtBoundingBox(bb, glm::vec3(0.f , 1.f, 1.f), 1.f);
 
   // Transform the BB to camera/eye space:
   splat::Bounds3f bbInCamera(
@@ -200,13 +211,37 @@ int main(int argc, char** argv) {
       uiServer->sendHistogram(pointCounts);
       uiServer->sendPreviewImage(*imagePtrBuffered);
     }
-    {
-      pvti::Tracepoint scope(&traceChannel, "build_histogram");
-      splat::buildTileHistogram(pointCounts, clipSpace, cpufb, vp);
+    if (state.device == "cpu") {
+      {
+        pvti::Tracepoint scope(&traceChannel, "build_histogram");
+        splat::buildTileHistogram(pointCounts, clipSpace, cpufb, vp);
+      }
+    } else {
+      {
+        pvti::Tracepoint scope(&traceChannel, "build_histogram");
+        ipuSplatter->getIPUHistogram(pointCounts);
+      }
     }
   };
 
-  auto dynamicView = modelView;
+  auto secondsElapsed = 0.0;
+
+  //mvp start
+  // [[-1.0, 0.0, 0.0, 0.0],
+  // [0.0,-0.09709989, -0.99527466, 0.0],
+  // [0.0, -0.99527466, 0.09709989, 0.0],
+  // [0.0, 0.0, -5.1539507, 1.0]]
+
+  auto mvpStart  = glm::mat4(1.0f);
+  mvpStart[0][0] = -1.0f;
+  mvpStart[1][1] = -0.09709989f;
+  mvpStart[1][2] = -0.99527466f;
+  mvpStart[2][1] = -0.99527466f;
+  mvpStart[2][2] = 0.09709989f;
+  mvpStart[3][2] = -5.1539507f;
+
+
+  auto dynamicView = mvpStart;
   do {
     auto startTime = std::chrono::steady_clock::now();
     *imagePtr = 0;
@@ -223,13 +258,24 @@ int main(int argc, char** argv) {
       pvti::Tracepoint scoped(&traceChannel, "mvp_transform_ipu");
       ipuSplatter->updateModelView(dynamicView);
       ipuSplatter->updateProjection(projection);
-      ipuSplatter->updateFocalLengths(state.X, state.Y);
+ 
+      ipuSplatter->updateFocalLengths(state.fov, state.lambda1 / 10.f);
       gm.execute(*ipuSplatter);
       ipuSplatter->getFrameBuffer(*imagePtr);
     }
 
     auto endTime = std::chrono::steady_clock::now();
     auto splatTimeSecs = std::chrono::duration<double>(endTime - startTime).count();
+
+    secondsElapsed += splatTimeSecs;
+    if (secondsElapsed > 3.f) {
+      ipu_utils::logger()->info("Splat time: {} points/sec: {}", splatTimeSecs, pts.size()/splatTimeSecs);
+      // print dynamic view matrix:
+
+      // for (int i = 0; i < 4; i++) {
+      //   ipu_utils::logger()->info("Dynamic view matrix: {} {} {} {}", dynamicView[i][0], dynamicView[i][1], dynamicView[i][2], dynamicView[i][3]);
+      // }
+    }
 
     if (uiServer) {
       hostProcessing.waitForCompletion();
@@ -240,8 +286,33 @@ int main(int argc, char** argv) {
       // Update projection:
       projection = splat::fitFrustumToBoundingBox(bbInCamera, state.fov, aspect);
       // Update modelview:
-      dynamicView = modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(0.f, 1.f, 0.f));
-      // dynamicView =dynamicView, glm::vec3(0.f, 0.f, -state.Z / 1000.f));
+      if (secondsElapsed >= 3.f) {
+        // print viewmatrix
+        for (int i = 0; i < 4; i++) {
+          ipu_utils::logger()->info("Dynamic view matrix: {} {} {} {}", modelView[i][0], modelView[i][1], modelView[i][2], modelView[i][3]);
+        }
+
+
+        printf("envRotationDegrees: %f\n", state.envRotationDegrees);
+        printf("envRotationDegrees2: %f\n", state.envRotationDegrees2);
+        printf("lambda1: %f\n", state.lambda1);
+        printf("fov: %f\n", state.fov);
+        secondsElapsed = 0.0;
+
+      }
+
+//       envRotationDegrees: 96.654427
+// envRotationDegrees2: 2.726311
+// fov: 0.352075
+
+// envRotationDegrees: 85.763603
+// envRotationDegrees2: 184.763657
+// fov: 0.433323
+
+      dynamicView = modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(1.f, 0.f, 0.f));
+      dynamicView = glm::rotate(dynamicView, glm::radians(state.envRotationDegrees2), glm::vec3(0.f, 1.f, 0.f));
+      dynamicView = glm::translate(dynamicView, glm::vec3(state.X / 50.f,  state.Y  / 50.f, -state.Z / 20.f + 20.f));
+
     } else {
       // Only log these if not in interactive mode:
       ipu_utils::logger()->info("Splat time: {} points/sec: {}", splatTimeSecs, pts.size()/splatTimeSecs);

@@ -26,6 +26,7 @@ const std::vector<std::string> packetTypes {
     "detach",              // Detach the remote-ui but continue: server can destroy the
                            // communication interface and continue (client -> server)
     "env_rotation",        // Update environment light rotation (client -> server)
+    "env_rotation_2",      // Update environment light rotation (client -> server)
     "exposure",            // Update tone-map exposure (client -> server)
     "gamma",               // Update tone-map gamma (client -> server)
     "X",                   // Update X pos of gaussian mean (client -> server)
@@ -110,6 +111,13 @@ class InterfaceServer {
                                       [&](const ComPacket::ConstSharedPacket& packet) {
                                         deserialise(packet, state.envRotationDegrees);
                                         ipu_utils::logger()->trace("Env rotation new value: {}", state.envRotationDegrees);
+                                        stateUpdated = true;
+                                      });
+
+      auto subs12 = receiver.subscribe("env_rotation_2",
+                                      [&](const ComPacket::ConstSharedPacket& packet) {
+                                        deserialise(packet, state.envRotationDegrees2);
+                                        ipu_utils::logger()->trace("Env rotation new value: {}", state.envRotationDegrees2);
                                         stateUpdated = true;
                                       });
 
@@ -221,6 +229,7 @@ public:
 
   struct State {
     float envRotationDegrees = 0.f;
+    float envRotationDegrees2 = 0.f;
     float exposure = 0.f;
     float gamma = 2.2f;
     float X = 640.f;
