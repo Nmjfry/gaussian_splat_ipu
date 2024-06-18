@@ -259,7 +259,7 @@ int main(int argc, char** argv) {
       ipuSplatter->updateModelView(dynamicView);
       ipuSplatter->updateProjection(projection);
  
-      ipuSplatter->updateFocalLengths(state.fov, state.lambda1 / 100.f);
+      ipuSplatter->updateFocalLengths(state.fov, state.lambda1 / 10.f);
       gm.execute(*ipuSplatter);
       ipuSplatter->getFrameBuffer(*imagePtr);
     }
@@ -295,6 +295,7 @@ int main(int argc, char** argv) {
 
         printf("envRotationDegrees: %f\n", state.envRotationDegrees);
         printf("envRotationDegrees2: %f\n", state.envRotationDegrees2);
+        printf("lambda1: %f\n", state.lambda1);
         printf("fov: %f\n", state.fov);
         secondsElapsed = 0.0;
 
@@ -309,8 +310,8 @@ int main(int argc, char** argv) {
 // fov: 0.433323
 
       dynamicView = modelView * glm::rotate(glm::mat4(1.f), glm::radians(state.envRotationDegrees), glm::vec3(1.f, 0.f, 0.f));
-      dynamicView = glm::rotate(dynamicView, glm::radians(state.envRotationDegrees2), glm::vec3(0.f, 0.f, 1.f));
-      dynamicView = glm::translate(dynamicView, glm::vec3(state.X / 50.f,  state.Y  / 50.f, -state.Z / 20.f ));
+      dynamicView = glm::rotate(dynamicView, glm::radians(state.envRotationDegrees2), glm::vec3(0.f, 1.f, 0.f));
+      dynamicView = glm::translate(dynamicView, glm::vec3(state.X / 50.f,  state.Y  / 50.f, -state.Z / 20.f + 20.f));
 
     } else {
       // Only log these if not in interactive mode:
