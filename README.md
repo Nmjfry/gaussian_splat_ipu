@@ -23,8 +23,6 @@ The implementation is highly experimental work in progress. Currently implementa
 - Project and rasterise
 - Read framebuffer back to CPU
 
-  ![image](https://github.com/Nmjfry/gaussian_splat_ipu/assets/55755481/36d777f7-745a-40b2-9bc4-90733b78204b)
-![image](https://github.com/Nmjfry/gaussian_splat_ipu/assets/55755481/ef2c79ab-98b1-443e-8e98-51ecc6e45c9c)
 ![image](https://github.com/Nmjfry/gaussian_splat_ipu/assets/55755481/229cdd13-6396-4c0c-bfd0-a38cf9014288)
 
 
