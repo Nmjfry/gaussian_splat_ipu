@@ -18,14 +18,17 @@ struct ivec4 {
   float y;
   float z;
   float w;
-  struct ivec4 operator+(ivec4 const &other) {
+  struct ivec4 operator+(ivec4 const &other) const {
     return {x + other.x, y + other.y, z + other.z, w + other.w};
   }
-  struct ivec4 operator-(ivec4 const &other) {
+  struct ivec4 operator-(ivec4 const &other) const {
     return {x - other.x, y - other.y, z - other.z, w - other.w};
   }
-  struct ivec4 operator*(float const &scalar) {
+  struct ivec4 operator*(float &scalar) const {
     return {x * scalar, y * scalar, z * scalar, w * scalar};
+  }
+  bool operator==(ivec4 const &other) const {
+    return x == other.x && y == other.y && z == other.z && w == other.w;
   }
 };
 
@@ -83,6 +86,9 @@ typedef struct directions {
     bool any() const {
       return up || right || down || left;
     }
+    bool none() const {
+      return !any();
+    }
 } directions;
 
 enum direction {
@@ -127,10 +133,10 @@ struct Bounds2f {
   Bounds2f clip(const Bounds2f& fixedBound, directions& dirs) const {
     ivec2 topleft = min;
     ivec2 bottomright = max;
-    dirs.left = topleft.x < fixedBound.min.x;
-    dirs.up = topleft.y < fixedBound.min.y;
-    dirs.right = bottomright.x >= fixedBound.max.x;
-    dirs.down = bottomright.y >= fixedBound.max.y;
+    dirs.left = floor(topleft.x) < fixedBound.min.x;
+    dirs.up = floor(topleft.y) < fixedBound.min.y;
+    dirs.right = ceil(bottomright.x) >= fixedBound.max.x;
+    dirs.down = ceil(bottomright.y) >= fixedBound.max.y;
 
     if (dirs.left) {
       topleft.x = fixedBound.min.x;
@@ -155,7 +161,7 @@ struct Bounds2f {
   }
 
   bool contains(const ivec2& v) const {
-    return v.x >= min.x && v.x < max.x && v.y >= min.y && v.y < max.y;
+    return ceil(v.x) >= min.x && floor(v.x) < max.x && ceil(v.y) >= min.y && floor(v.y) < max.y;
   }
 
   bool contains(const ivec4& v) const {
@@ -224,11 +230,14 @@ struct square : Primitive {
 };
 
 struct Gaussian2D {
-  ivec2 mean; // in screen space
   ivec4 colour; // RGBA colour space
   ivec3 cov2D;
+  ivec2 mean; // in screen space 
+  float z;
 
-  Gaussian2D(ivec2 _mean, ivec4 _colour, ivec3 _cov2D) : mean(_mean), colour(_colour), cov2D(_cov2D) {}
+  Gaussian2D(ivec2 _mean, ivec4 _colour, ivec3 _cov2D, float z) : mean(_mean), colour(_colour), cov2D(_cov2D), z(z) {}
+
+  Gaussian2D() {}
 
   static float max(float a, float b) {
     return a > b ? a : b;
@@ -259,7 +268,21 @@ struct Gaussian2D {
     auto DD = (e2 / 2) * (e2 / 2);
     auto dxMax = glm::sqrt(dd * (c * c) + DD * (s * s));
     auto dyMax = glm::sqrt(dd * (s * s) + DD * (c * c));
-    return Bounds2f({mean.x - dxMax, mean.y - dyMax}, {mean.x + dxMax, mean.y + dyMax});
+
+    float my_radius = ceil(3.f * sqrt(max(e1, e2)));
+    // return Bounds2f({mean.x - dxMax, mean.y - dyMax}, {mean.x + dxMax, mean.y + dyMax});
+
+    return Bounds2f({mean.x - my_radius, mean.y - my_radius}, {mean.x + my_radius, mean.y + my_radius});
+  }
+
+  ivec4 ComputeConicOpacity() const {
+    // Invert covariance (EWA algorithm)
+    float det = (cov2D.x * cov2D.z - cov2D.y * cov2D.y);
+    if (det == 0.0f)
+      return {0.f, 0.f, 0.f, 0.f};
+    float det_inv = 1.f / det;
+    ivec4 conic = { cov2D.z * det_inv, -cov2D.y * det_inv, cov2D.x * det_inv, colour.w };
+    return conic;
   }
 
   // Pixel test to see if a pixel is inside the gaussian
@@ -307,8 +330,11 @@ class Gaussian3D {
       return a < b ? a : b;
     }
 
-    ivec3 ComputeCov2D(const glm::mat4& mvp, float tan_fovx, float tan_fovy) {
-      glm::vec3 t = glm::vec3(mvp * glm::vec4(mean.x, mean.y, mean.z, 1.f));
+    ivec3 ComputeCov2D(const glm::mat4& projmatrix, const glm::mat4& viewmatrix, float tan_fovx, float tan_fovy, float focal_x, float focal_y) {
+      // const auto mvp = projmatrix * viewmatrix;
+
+      const glm::mat4 mv = projmatrix * viewmatrix;
+      glm::vec3 t = glm::vec3(mv * glm::vec4(mean.x, mean.y, mean.z, 1.0f));
       const float limx = 1.3f * tan_fovx;
       const float limy = 1.3f * tan_fovy;
       const float txtz = t.x / t.z;
@@ -316,15 +342,29 @@ class Gaussian3D {
       t.x = min(limx, max(-limx, txtz)) * t.z;
       t.y = min(limy, max(-limy, tytz)) * t.z;
 
-      const float focal_x = 1.5f;
-      const float focal_y = 1.f;
-
       glm::mat3 J = glm::mat3(
         focal_x / t.z, 0.0f, -(focal_x * t.x) / (t.z * t.z),
         0.0f, focal_y / t.z, -(focal_y * t.y) / (t.z * t.z),
         0, 0, 0);
 
-      glm::mat3 W = glm::mat3(mvp);
+      glm::mat3 W = glm::mat3(mv);
+      // for (int row = 0; row < 4; ++row) {
+      //   for (int col = 0; col < 4; ++col) {
+      //       printf("%f ", mv[row][col]);
+      //   }
+      // }
+      //   printf("\n");
+
+        // -1.000000 0.0      0.0       0.0 
+        //  0.0      0.999999 0.0       0.0
+        //  0.0      0.0     -0.999999  0.0
+        //  0.0      0.0     -1.636055  1.000000
+
+        //  -1.000000 0.0 0.0   0.0
+        //  0.0 0.999999 0.0    0.0 
+        //  0.0 0.0 -0.999999   -1.636055
+        //  0.0 0.0 0.0         1.000000 
+
 
       glm::mat3 T = W * J;
 
@@ -336,6 +376,8 @@ class Gaussian3D {
       // one pixel wide/high. Discard 3rd row and column.
       cov[0][0] += 0.3f;
       cov[1][1] += 0.3f;
+
+      // printf("cov %f, %f, %f\n", float(cov[0][0]), float(cov[0][1]), float(cov[1][1]));
 
       return { float(cov[0][0]), float(cov[0][1]), float(cov[1][1]) };
     }

@@ -6,6 +6,7 @@
 #include <ipu/ipu_utils.hpp>
 #include <poputil/TileMapping.hpp>
 #include <string>
+#include <tileMapping/tile_config.hpp>  
 
 namespace splat {
 
@@ -26,6 +27,7 @@ public:
   
   void addBidirectionalEdge(unsigned tid1, unsigned tid2, struct edge e1, struct edge e2);
   void addEdge(unsigned tid1, unsigned tid2, struct edge edge);
+  void constructLattice(const poplar::Graph::TileToTensorMapping& tm, const TiledFramebuffer& fb);
   poplar::program::Sequence getBroadcastSequence() { return broadcastSequence; }
 
 private:

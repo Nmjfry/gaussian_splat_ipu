@@ -8,6 +8,10 @@
 
 #include <poputil/TileMapping.hpp>
 
+#include <popops/codelets.hpp>
+#include <popops/TopK.hpp>
+#include <popops/Fill.hpp>
+
 #include <tileMapping/edge_builder.hpp>
 
 using namespace poplar;
@@ -15,8 +19,11 @@ using namespace poplar;
 namespace splat {
 
 IpuSplatter::IpuSplatter(const Points& verts, TiledFramebuffer& fb, bool noAMP)
-  : modelViewProjection("mvp"), inputVertices("verts_in"), outputFramebuffer("frame_buffer"), 
-    transformMatrix(16),
+  : modelView("mv"), projection("mp"), fxy("fxy"), inputVertices("verts_in"), outputFramebuffer("frame_buffer"), 
+    counts("splat_counts"),
+    hostModelView(16),
+    hostProjection(16),
+    fxyHost(2),
     initialised(false),
     disableAMPVertices(noAMP),
     fbMapping(fb)
@@ -40,8 +47,11 @@ IpuSplatter::IpuSplatter(const Points& verts, TiledFramebuffer& fb, bool noAMP)
 }
 
 IpuSplatter::IpuSplatter(const Gaussians& verts, TiledFramebuffer& fb, bool noAMP)
-  : modelViewProjection("mvp"), inputVertices("verts_in"), outputFramebuffer("frame_buffer"), 
-    transformMatrix(16),
+  : modelView("mv"), projection("mp"), fxy("fxy"), inputVertices("verts_in"), outputFramebuffer("frame_buffer"), 
+    counts("splat_counts"),
+    hostModelView(16),
+    hostProjection(16),
+    fxyHost(2),
     initialised(false),
     disableAMPVertices(noAMP),
     fbMapping(fb)
@@ -51,11 +61,6 @@ IpuSplatter::IpuSplatter(const Gaussians& verts, TiledFramebuffer& fb, bool noAM
   printf("num verts in: %lu, elemsize: %lu \n", verts.size(), elemSize);
   
   for (auto j = 0u; j < verts.size(); ++j) {
-    //   ivec4 mean; // in world space
-    // ivec4 colour; // RGBA colour space
-    // ivec4 rot;  // local rotation of gaussian (real, i, j, k)
-    // ivec3 scale;
-    // float gid;
     auto gptr = (const float*)&verts[j];
     for (auto i = 0u; i < elemSize; ++i) {
       hostVertices.push_back(*(gptr + i));
@@ -68,16 +73,40 @@ IpuSplatter::IpuSplatter(const Gaussians& verts, TiledFramebuffer& fb, bool noAM
       frameBuffer.push_back(0.0);
     }
   }
+
   printf("Fb size: %luB\n", frameBuffer.size());
+
+  splatCounts.resize(fb.numTiles);
+  for (auto& c : splatCounts) {
+    c = 0;
+  }
 }
 
-void IpuSplatter::updateModelViewProjection(const glm::mat4& mvp) {
-  auto mvpt = glm::transpose(mvp);
-  auto ptr = (const float*)glm::value_ptr(mvpt);
-  for (auto i = 0u; i < transformMatrix.size(); ++i) {
-    transformMatrix[i] = *ptr;
+
+void IpuSplatter::updateModelView(const glm::mat4& mv) {
+  auto mvt = glm::transpose(mv);
+  auto ptr = (const float*)glm::value_ptr(mvt);
+  for (auto i = 0u; i < hostModelView.size(); ++i) {
+    hostModelView[i] = *ptr;
     ptr += 1;
   }
+}
+
+void IpuSplatter::updateProjection(const glm::mat4& mp) {
+  auto mpt = glm::transpose(mp);
+  auto ptr = (const float*)glm::value_ptr(mpt);
+  for (auto i = 0u; i < hostProjection.size(); ++i) {
+    hostProjection[i] = *ptr;
+    ptr += 1;
+  }
+}
+
+void IpuSplatter::getIPUHistogram(std::vector<u_int32_t>& counts) const {
+  counts = splatCounts;
+}
+
+void IpuSplatter::updateFocalLengths(float fx, float fy) {
+  fxyHost = {fx, fy};
 }
 
 // takes a cv::Mat image and returns a copy of the original but with the image partitioned into tiles of size tileHeight x tileWidth.
@@ -133,7 +162,7 @@ struct MappingInfo {
 };
 
 MappingInfo calculateMapping(poplar::Graph& g, std::size_t numElements, std::size_t grainSize, TiledFramebuffer &fbMapping) {
-  ipu_utils::logger()->info("Input size of pts: {}B", numElements);
+  ipu_utils::logger()->info("Input size of data: {}B", numElements);
   const double numTiles = g.getTarget().getNumTiles();
 
   if (fbMapping.numTiles < numTiles) {
@@ -143,19 +172,24 @@ MappingInfo calculateMapping(poplar::Graph& g, std::size_t numElements, std::siz
   double grainsPerTile = std::ceil(numElements / (fbMapping.numTiles * grainSize));
   double elementsPerTile = grainsPerTile * grainSize;
   double fullTiles = std::floor(numElements / elementsPerTile);
+  double unfilledTiles = fbMapping.numTiles - fullTiles;
   double remainingElements = numElements - (fullTiles * elementsPerTile);
   double paddedRemainder = std::ceil(remainingElements / grainSize) * grainSize;
 
-  fullTiles = fullTiles > 1439 ? 1439 : fullTiles;
+  auto totalTiles = fullTiles + unfilledTiles;
+  totalTiles = totalTiles > fbMapping.numTiles - 1 ? fbMapping.numTiles - 1 : totalTiles;
 
   ipu_utils::logger()->info("Upper bound elements per tile: {}", elementsPerTile);
   ipu_utils::logger()->info("Full tiles: {}", fullTiles);
+  ipu_utils::logger()->info("Unfilled tiles: {}", unfilledTiles);
   ipu_utils::logger()->info("Remaining elements: {}", remainingElements);
-  ipu_utils::logger()->info("Padded elements on last tile: {}", paddedRemainder);
+  ipu_utils::logger()->info("Padded elements on last used tile: {}", paddedRemainder);
   ipu_utils::logger()->info("Padding: {}", paddedRemainder - remainingElements);
+  ipu_utils::logger()->info("Total padding to fill all tiles: {}", paddedRemainder - remainingElements + (unfilledTiles * elementsPerTile));
+  ipu_utils::logger()->info("Total tiles: {}", totalTiles);
 
-  const std::size_t padding = paddedRemainder - remainingElements;
-  return MappingInfo{padding, std::size_t(elementsPerTile), std::size_t(fullTiles)};
+  const std::size_t padding = paddedRemainder - remainingElements + (unfilledTiles * elementsPerTile);
+  return MappingInfo{padding, std::size_t(elementsPerTile), std::size_t(totalTiles)};
 }
 
 
@@ -174,13 +208,15 @@ void applyTileMapping(poplar::Graph& g, const poplar::Tensor& paddedInput, const
   // Last tile has fewer elements:
   auto lastSlice = paddedInput.slice(sliceStart, paddedInput.numElements());
   ipu_utils::logger()->info("Size of slice on last tile: {}", lastSlice.numElements());
-  g.setTileMapping(lastSlice, t);
+  if (lastSlice.numElements() > 0) {
+    g.setTileMapping(lastSlice, t);
+  }
 }
 
 // Add a vertex to project vertices that uses vanilla C++ code.
 void addProjectionVertex(poplar::Graph& g, poplar::ComputeSet& cs, unsigned t, const poplar::Tensor& tid,  const poplar::Tensor& westIn, const poplar::Tensor& eastOut,
                          const poplar::Tensor& modelViewProjection, const poplar::Tensor& ptsIn, const poplar::Tensor& localFb) {
-  auto v = g.addVertex(cs, "Transform4x4");
+  auto v = g.addVertex(cs, "GSplat");
   g.setTileMapping(v, t);
 
   g.connect(v["matrix"], modelViewProjection);
@@ -212,7 +248,7 @@ void addProjectionVertexAMP(poplar::Graph& g, poplar::ComputeSet& cs, unsigned t
 }
 
 void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
-  auto vg = graph.createVirtualGraph(0u, 1440u);
+  auto vg = graph.createVirtualGraph(0u, fbMapping.numTiles);
 
   const auto codeletFile = std::string(POPC_PREFIX) + "/codelets/splat/codelets.cpp";
   const auto glmPath = std::string(POPC_PREFIX) + "/external/glm/";
@@ -221,49 +257,43 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   const auto tileMapping = std::string(POPC_PREFIX) + "/include/tileMapping";
   const auto includes = " -I " + glmPath + " -I " + mathPath + " -I " + otherIncludes + " -I " + tileMapping;
   ipu_utils::logger()->debug("POPC_PREFIX: {}", POPC_PREFIX);
+  popops::addCodelets(vg);
   vg.addCodelets(codeletFile, poplar::CodeletFileType::Auto, "-O3" + includes);
 
   // Create storage for the model view projeciton matrix. Place the master copy on tile 0
   // and then broadcast from their to all other tiles before any computations.
-  modelViewProjection.buildTensor(vg, FLOAT, {4, 4});
-  vg.setTileMapping(modelViewProjection, 0u);
+  modelView.buildTensor(vg, FLOAT, {4, 4});
+  vg.setTileMapping(modelView, 0u);
+
+  projection.buildTensor(vg, FLOAT, {4, 4});
+  vg.setTileMapping(projection, 0u);
+
+  fxy.buildTensor(vg, FLOAT, {2});
+  vg.setTileMapping(fxy, 0u);
 
   // Build a program to upload and broadcast the modelling-projection matrix:
   program::Sequence broadcastMvp;
-  broadcastMvp.add(modelViewProjection.buildWrite(vg, true));
+  broadcastMvp.add(modelView.buildWrite(vg, true));
+  broadcastMvp.add(projection.buildWrite(vg, true));
+  broadcastMvp.add(fxy.buildWrite(vg, true));
 
   auto fbGrainSize = 4;
   auto fbToTileMapping = calculateMapping(vg, frameBuffer.size(), fbGrainSize, fbMapping);
-  printf("Framebuffer layout: %lu, %lu, %lu\n", fbToTileMapping.padding, fbToTileMapping.elementsPerTile, fbToTileMapping.totalTiles);
+  ipu_utils::logger()->info("Framebuffer layout: padding: {}, elementsPerTile: {}, totalTiles: {}", fbToTileMapping.padding, fbToTileMapping.elementsPerTile, fbToTileMapping.totalTiles);
   auto paddedFramebuffer = vg.addVariable(FLOAT, {frameBuffer.size() + fbToTileMapping.padding}, "padded_frame_buffer");
   applyTileMapping(vg, paddedFramebuffer, fbToTileMapping);
-  
   outputFramebuffer = paddedFramebuffer.slice(0, frameBuffer.size());
 
   // Map the point cloud vertices across all tiles. TODO: If we are not using AMP the only constraint
   // is that the grain size must be a multiple of 4 (so that 4-vectors are not split between
   // tiles). If we use the AMP we need to have at least 8 4-vectors to fill the AMP pipeline so
   // the minimum grain size is 32:
-  const auto grainSize = 4; //disableAMPVertices ? 4 : 4 * 8;
-
-  // MappingInfo{padding, std::size_t(elementsPerTile), std::size_t(fullTiles)};
-
-  printf("hostvertices size: %lu, numtiles %f\n", hostVertices.size(), fbMapping.numTiles);
-  auto numElemsPerTile = std::floor(hostVertices.size() / fbMapping.numTiles); // lower bound
-  auto remainingElements = hostVertices.size() - (numElemsPerTile * fbMapping.numTiles);
-  auto paddedRemainder = std::ceil(remainingElements / grainSize) * grainSize;
-  auto padding = paddedRemainder - remainingElements;
-
-  printf("numElemsPerTile: %f, remainingElements : %f, padding: %f\n", numElemsPerTile, remainingElements, padding);
-  auto mapping = MappingInfo{std::size_t(padding), std::size_t(numElemsPerTile), std::size_t(fbMapping.numTiles)};
-  
-  mapping.totalTiles = mapping.totalTiles > 1439 ? 1439 : mapping.totalTiles;
-
-  // auto mapping = calculateMapping(vg, hostVertices.size(), grainSize, fbMapping);
-  printf("Vertex layout: %lu, %lu, %lu\n", mapping.padding, mapping.elementsPerTile, mapping.totalTiles);
+  ipu_utils::logger()->info("hostvertices size: {}, numtiles {}", hostVertices.size(), fbToTileMapping.totalTiles);
+  const auto grainSize = sizeof(Gaussian3D); //disableAMPVertices ? 4 : 4 * 8;
+  auto mapping = calculateMapping(vg, hostVertices.size(), grainSize, fbMapping);
+  ipu_utils::logger()->info("Vertex layout: padding: {}, elementsPerTile: {}, totalTiles: {}", mapping.padding, mapping.elementsPerTile, mapping.totalTiles);
   auto paddedInput = vg.addVariable(FLOAT, {hostVertices.size() + mapping.padding}, "padded_verts_in");
   applyTileMapping(vg, paddedInput, mapping);
-
   // We only want to stream to a slice of the padded tensor:
   inputVertices = paddedInput.slice(0, hostVertices.size());
 
@@ -271,111 +301,102 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
   const auto csName = disableAMPVertices ? "project" : "project_amp";
   auto splatCs = vg.addComputeSet(csName);
 
+// for TUM desk:
+// 450
+// chan * 2
+  unsigned numPoints = 300;
+  std::size_t channelSize = numPoints * grainSize;
+  std::size_t extraStorageSize = channelSize * 2;
+
+  // construct z-buffer program to sort the gaussians
+  program::Sequence sortGaussians;
+
+  MappingInfo zBufferMapping = mapping;
+  zBufferMapping.elementsPerTile = (zBufferMapping.elementsPerTile + extraStorageSize) / grainSize;
+  std::size_t totalGaussianCapacity = (hostVertices.size() + mapping.padding + extraStorageSize * zBufferMapping.totalTiles) / grainSize;
+  
+  const auto indices = vg.addVariable(poplar::INT, {totalGaussianCapacity}, "indices");
+  applyTileMapping(vg, indices, zBufferMapping);
+
+  const auto splatCounts = vg.addVariable(poplar::UNSIGNED_INT, {(size_t) fbMapping.numTiles});
+  MappingInfo counterInfo = {0, 1, (size_t) fbMapping.numTiles};
+  applyTileMapping(vg, splatCounts, counterInfo);
+  counts = splatCounts.slice(0, fbMapping.numTiles);
+
+
+  std::vector<poplar::VertexRef> vertices;
   // Get the tile mapping and connect the vertices:
   const auto tm = vg.getTileMapping(paddedInput);
   const auto tmFb = vg.getTileMapping(paddedFramebuffer);
-
-  unsigned numPoints = 100;
-  std::size_t channelSize = numPoints * GAUSSIAN_SIZE;
-
-  std::vector<poplar::VertexRef> vertices;
+  const auto tmIndices = vg.getTileMapping(indices);
+  const auto tmCounts = vg.getTileMapping(splatCounts);
 
   for (auto t = 0u; t < tm.size(); ++t) {
     const auto& m = tm[t];
     const auto& mFb = tmFb[t];
+    const auto& mIndices = tmIndices[t];
+    const auto& mCounts = tmCounts[t];
     if (m.size() > 1u) {
       throw std::runtime_error("Expected fb to be stored as a single contiguous region per tile.");
     }
     if (m.size() > 0u) {
       // Add the tile local MVP matrix variable and append a copies that broadcast it to all tiles:
-      auto localMvp = vg.clone(modelViewProjection, "mvp_tile_" + std::to_string(t));
-      vg.setTileMapping(localMvp, t);
-      broadcastMvp.add(program::Copy(modelViewProjection, localMvp));
+      auto localMv = vg.clone(modelView, "mv_tile_" + std::to_string(t));
+      vg.setTileMapping(localMv, t);
+      broadcastMvp.add(program::Copy(modelView, localMv));
+
+      auto localProj = vg.clone(projection, "mp_tile_" + std::to_string(t));
+      vg.setTileMapping(localProj, t);
+      broadcastMvp.add(program::Copy(projection, localProj));
+
+      auto localFxy = vg.clone(fxy, "fxy_tile_" + std::to_string(t));
+      vg.setTileMapping(localFxy, t);
+      broadcastMvp.add(program::Copy(fxy, localFxy));
 
       auto ptsIn = paddedInput.slice(m.front());
+      auto sliceFb = paddedFramebuffer.slice(mFb.front());
+      auto sliceIdxs = indices.slice(mIndices.front());
+      auto counter = splatCounts.slice(mCounts.front());
 
-      Tensor tid = vg.addConstant<int>(INT, {1}, {int(t)});
+      auto storage = vg.addVariable(poplar::FLOAT, {extraStorageSize}, "extra_storage");
+      vg.setTileMapping(storage, t);
+      auto gaussians = concat(ptsIn, storage);
+
+      auto gaus2D = vg.addVariable(poplar::FLOAT, {sliceIdxs.numElements() * sizeof(Gaussian2D)}, "z_buffer");
+      vg.setTileMapping(gaus2D, t);
+
+      auto tid = vg.addConstant<int>(INT, {1}, {int(t)});
       vg.setTileMapping(tid, t);
 
-      auto sliceFb = paddedFramebuffer.slice(mFb.front());
 
-      auto stored = vg.addVariable(poplar::FLOAT, {channelSize});
-      vg.setTileMapping(stored, t);
-
-      auto v = vg.addVertex(splatCs, "Transform4x4");
+      auto v = vg.addVertex(splatCs, "GSplat");
       vg.setTileMapping(v, t);
-      vg.connect(v["matrix"], localMvp.flatten());
-      vg.connect(v["vertsIn"], ptsIn);
+      vg.connect(v["modelView"], localMv.flatten());
+      vg.connect(v["projection"], localProj.flatten());
+      vg.connect(v["vertsIn"], gaussians);
+      vg.connect(v["indices"], sliceIdxs);
+      vg.connect(v["gaus2D"], gaus2D);
       vg.connect(v["localFb"], sliceFb);
+      vg.connect(v["fxy"], localFxy);
       vg.connect(v["tile_id"], tid);
-      vg.connect(v["stored"], stored);
+      vg.connect(v["splatted"], counter);  
       vertices.push_back(v);
     }
   }
 
-  struct edge r2l("rightOut", "leftIn"); // -->
-  struct edge l2r("leftOut", "rightIn"); // <--
-
-  struct edge l2l("leftOut", "leftIn"); // <->
-  struct edge r2r("rightOut", "rightIn"); // >-<
-
-  struct edge u2d("upOut", "downIn");
-  struct edge d2u("downOut", "upIn");
-  
-  struct edge u2u("upOut", "upIn");
-  struct edge d2d("downOut", "downIn");
 
   EdgeBuilder eb(vg, vertices, channelSize);
-
-  for (auto t = 0u; t < vertices.size(); ++t) {
-    const auto& m = tm[t];
-    if (m.size() > 1u) {
-      throw std::runtime_error("Expected fb to be stored as a single contiguous region per tile.");
-    }
-    if (m.size() > 0u) {
-      auto tileOnBoundary = fbMapping.checkImageBoundaries(t);
-
-      if (tileOnBoundary.up) {
-        eb.addEdge(t, t, u2u);
-      }
-
-      if (tileOnBoundary.left) {
-        eb.addEdge(t, t, l2l);
-      }
-
-      if (tileOnBoundary.right) {
-        eb.addEdge(t, t, r2r);
-      }
-
-      if (tileOnBoundary.down) {
-        eb.addEdge(t, t, d2d);
-      }
-
-      if (!tileOnBoundary.right && t + 1 < vertices.size()) {
-        eb.addEdge(t, t + 1, r2l);
-        eb.addEdge(t + 1, t, l2r);
-      } else if (!tileOnBoundary.right) {
-        eb.addEdge(t, t, r2r);
-      }
-
-      if (!tileOnBoundary.down && t + fbMapping.numTilesAcross < vertices.size()) {
-        eb.addEdge(t, t + fbMapping.numTilesAcross, d2u);
-        eb.addEdge(t + fbMapping.numTilesAcross, t, u2d);
-      } else if (!tileOnBoundary.down) {
-        eb.addEdge(t, t, d2d);
-      }
-    }
-  }
-
+  eb.constructLattice(tm, fbMapping);
   // this program sequence will copy the points between all the tiles in the graph
   program::Sequence broadcastPoints = eb.getBroadcastSequence();
 
   program::Sequence main;
-  main.add(broadcastMvp);
-  main.add(broadcastPoints);
-  // main.add(inputVertices.buildWrite(vg, true));
-  main.add(program::Execute(splatCs));
+  main.add(broadcastMvp); // sends the model view and projection matrices to all tiles
+  main.add(program::Execute(splatCs)); // splats the gaussians
+  main.add(broadcastPoints); // broadcasts any misplaced gaussians to other tiles
+
   main.add(outputFramebuffer.buildRead(vg, true));
+  main.add(counts.buildRead(vg, true));
 
   program::Sequence setup;
   setup.add(inputVertices.buildWrite(vg, true));
@@ -387,9 +408,12 @@ void IpuSplatter::build(poplar::Graph& graph, const poplar::Target& target) {
 void IpuSplatter::execute(poplar::Engine& engine, const poplar::Device& device) {
   if (!initialised) {
     initialised = true;
-    modelViewProjection.connectWriteStream(engine, transformMatrix);
+    modelView.connectWriteStream(engine, hostModelView);
+    projection.connectWriteStream(engine, hostProjection);
+    fxy.connectWriteStream(engine, fxyHost);
     inputVertices.connectWriteStream(engine, hostVertices);
     outputFramebuffer.connectReadStream(engine, frameBuffer);
+    counts.connectReadStream(engine, splatCounts);
     getPrograms().run(engine, "write_verts");
   }
   getPrograms().run(engine, "project");

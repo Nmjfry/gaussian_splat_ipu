@@ -2,24 +2,26 @@
 
 Experimental implementation of an alternative to neural radiance fields: [3D Gaussian Splatting for Real-Time Radiance Field Rendering](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting) B. Kerbl and G. Kopanas, T. Leimk{\"u}hler and G. Drettakis, ACM Transactions on Graphics, July 2023.
 
+![image](https://github.com/Nmjfry/gaussian_splat_ipu/assets/55755481/9792b113-a6a0-43be-b0f8-4781c9052839)
+
+
 ## Which bits are a good fit for IPU?:
-- Should be able to perform efficient Gaussian transformations and splats using matrix and convolution unit.
+- Efficient Gaussian transformations and splats using matrix and convolution unit.
 - Tile based renderer is IPU friendly (each tile of framebuffer can stay pinned in SRAM of each IPU tile).
 - Can hold millions of gaussians in SRAM.
   - i.e. scene and framebuffer can all stay in SRAM.
 
-## Which bits will be difficult?:
+## Which bits are difficult?:
 - After transformation and sorting Gaussians need to be dynamically moved to the destination tile(s) for splatting.
-- Load imbalances: depending on scene and viewpoint the number of Gaussians splatted per tile could vary significantly.
+- Load imbalances: depending on scene and viewpoint the number of Gaussians splatted per tile vary significantly.
  - I.e. any one gaussian might need to be splatted on 0 or all tiles!
-- We will try to solve this using experimental dynamic/jitted exchange code.
 
 The implementation is highly experimental work in progress. Currently implementation is as follows:
 
-- Point rasterisation on CPU.
-- Remote viewer.
-- Ability to switch render device between CPU/IPU in remote viewer.
-- Currently when IPU is selected as the render device it only transforms the points using the AMP unit: they are then splatted on the CPU.
+- Divide gaussians and framebuffer between tiles
+- Copy MVP matrix to all tiles 
+- Project and rasterise
+- Read framebuffer back to CPU
 
 ### License
 
@@ -107,7 +109,7 @@ Once you are in the container find the ports panel and forward a port number of 
 On the cloud machine in your docker container launch the server:
 
 ```
-./src/main/splat --input ../data/horse_statue_01.xyz --ui-port 5000
+./src/main/splat --input ../data/model.ply --ui-port 5000
 ```
 
 On your local laptop or workstation launch the remote user interface:
